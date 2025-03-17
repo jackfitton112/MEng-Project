@@ -1,0 +1,6 @@
+﻿Designator,Footprint,Quantity,Value,LCSC Part #
+"A1, A3, A4, A5, A6",Pololu_Breakout-16_15.2x20.3mm,5,Pololu_Breakout_A4988,
+A2,RaspberryPi_Pico_Common_THT,1,RaspberryPi_Pico,
+J1,PinSocket_1x02_P2.54mm_Vertical,1,Conn_01x02_Pin,
+"J2, J3, J4, J5, J6",PinHeader_1x04_P2.54mm_Vertical,5,Conn_01x04_Pin,
+"TP1, TP10, TP11, TP12, TP13, TP14, TP15, TP2, TP3, TP4, TP5, TP6, TP7, TP8, TP9",TestPoint_Pad_2.5x2.5mm,15,TestPoint,
