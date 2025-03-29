@@ -1,3 +1,11 @@
+############################################################################################################
+# This script computes the reachable workspace of the Tripteron end effector in each plane and plots it to a 3D graph.
+# Jack Fitton, 2025
+
+# Known Bugs: Currently there is a massive singularity going through the centre of the work envolope, this is not actaully reachable by
+# the robot and should be removed from the graph. Currently im not sure how to do this but I will look into it.
+############################################################################################################
+
 import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
@@ -112,6 +120,8 @@ if best_points is not None:
     # Plot min and max carriage positions as lines
     ax.plot(best_min_positions, np.zeros_like(best_min_positions), np.zeros_like(best_min_positions), label="Min Rail Movements", color="red", linestyle="dotted")
     ax.plot(best_max_positions, np.zeros_like(best_max_positions), np.zeros_like(best_max_positions), label="Max Rail Movements", color="green", linestyle="dotted")
+
+
 
 ax.set_xlabel("X Position (mm)")
 ax.set_ylabel("Y Position (mm)")

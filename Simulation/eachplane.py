@@ -1,3 +1,8 @@
+############################################
+# This script computes the reachable workspace of the Tripteron end effector in each plane.
+# Jack Fitton, 2025
+############################################
+
 import numpy as np
 import matplotlib.pyplot as plt
 

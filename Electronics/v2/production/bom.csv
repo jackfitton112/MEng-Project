@@ -1,0 +1,9 @@
+﻿Designator,Footprint,Quantity,Value,LCSC Part #
+A1,Arduino_Nano,1,Arduino_Nano_RP2040_Connect,
+"C1, C2",0603,2,C,
+"D1, D2, D3",0603,3,LED,
+"J1, J3, J8",PinHeader_1x03_P2.54mm_Vertical,3,Conn_01x03_Pin,
+"J2, J5, J6, J7",PinHeader_1x02_P2.54mm_Vertical,4,Conn_01x02_Pin,
+J4,PinHeader_1x10_P2.54mm_Vertical,1,Conn_01x10_Pin,
+"R1, R2, R3",0603,3,R,
+U1,SOT-223-3_TabPin2,1,NCP1117-3.3_SOT223,
