@@ -1,5 +1,5 @@
 ############################################################################################################
-# This script computes the reachable workspace of the Tripteron end effector in each plane and plots it to a 3D graph.
+# This script computes the reachable workspace of the Tripteron end effector in each plane and plots it to a 3D graph while calculating the best angles for the platforms.
 # Jack Fitton, 2025
 
 # Known Bugs: Currently there is a massive singularity going through the centre of the work envolope, this is not actaully reachable by
@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 
 # Constants
-ARM_LENGTH = 340  # mm
+ARM_LENGTH = 180  # mm
 RAIL_LENGTH = 390  # mm
 
 PLATFORM_WIDTH = 30  # mm
