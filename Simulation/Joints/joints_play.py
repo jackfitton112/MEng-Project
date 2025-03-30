@@ -1,6 +1,7 @@
 
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.animation as animation
 from mpl_toolkits.mplot3d import Axes3D
 from svgpathtools import svg2paths2
 from svgpathtools import Path, Line, CubicBezier, QuadraticBezier, Arc
@@ -152,35 +153,23 @@ def calcArmJointPosAC(start, end, start_angle_deg=60):
     delta = end - start
     distance = np.linalg.norm(delta)
 
-    # Check if the position is reachable
-    if distance > 2 * SMALL_ARM_LENGTH:
-        raise ValueError("Target position is out of reach")
+    # half the distance
+    half_distance = distance / 2
 
-    # Convert start angle to radians
-    start_angle_rad = np.radians(start_angle_deg)
+    #calc Z positon with pythagoras where hypothenuse is SMALL_ARM_LENGTH and the other side is half the distance
+    z = np.sqrt(SMALL_ARM_LENGTH**2 - half_distance**2)
 
-    # Calculate midpoint distance (distance from start to elbow)
-    cos_angle = (2 * SMALL_ARM_LENGTH**2 - distance**2) / (2 * SMALL_ARM_LENGTH**2)
-    angle_joint = np.arccos(np.clip(cos_angle, -1.0, 1.0))
+    # Calculate angle between delta and X-axis
+    angle = np.arctan2(delta[1], delta[0])
 
-    # Calculate direction unit vector
-    direction_unit = delta / distance
+    # Calculate joint position
+    joint_x = start[0] + half_distance * np.cos(angle)
+    joint_y = start[1] + half_distance * np.sin(angle)
+    joint_z = z
 
-    # Midpoint (elbow) position
-    elbow_distance = SMALL_ARM_LENGTH
-    elbow = start + elbow_distance * direction_unit
+    return np.array([joint_x, joint_y, joint_z])
 
-    # Calculate elbow height
-    height_offset = SMALL_ARM_LENGTH * np.sin(angle_joint / 2)
-    horizontal_offset = SMALL_ARM_LENGTH * np.cos(angle_joint / 2)
 
-    # Horizontal plane adjustments
-    xy_plane_angle = np.arctan2(delta[1], delta[0])
-    elbow_x = start[0] + horizontal_offset * np.cos(xy_plane_angle)
-    elbow_y = start[1] + horizontal_offset * np.sin(xy_plane_angle)
-    elbow_z = start[2] + height_offset
-
-    return np.array([elbow_x, elbow_y, elbow_z])
 
 
 def calcJointPos(A, B, C, X, Y, Z):
@@ -412,8 +401,13 @@ def plot_points(points):
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
 
-    for point in points:
-        ax.scatter(point[0], point[1], point[2], c='r', marker='o')
+    x_points = [point[0] for point in points]
+    y_points = [point[1] for point in points]
+    z_points = [point[2] for point in points]
+
+    ax.plot(x_points, y_points, z_points)
+
+
 
     #get the last point and plot the joint positions
     A, B, C = inverse_kinematics(*points[-1], angle_A=60, angle_B=50, angle_C=60)
@@ -453,7 +447,7 @@ def sample_path(path, num_points):
         points.append(path.point(t))
     return points
 
-def svg_to_path(svg_file, num_points_per_path=10, center=(170, 70), z_height=5, lift_height=15, gap_threshold=2.0):
+def svg_to_path(svg_file, num_points_per_path=10, center=(170, 90), z_height=5, lift_height=15, gap_threshold=2.0):
     """
     Parse SVG, scale and center, and return end effector + platform positions.
     Automatically lifts pen if next point is far from current point (i.e., a gap).
@@ -482,8 +476,8 @@ def svg_to_path(svg_file, num_points_per_path=10, center=(170, 70), z_height=5, 
     svg_size = max_xy - min_xy
 
     # Fit SVG within robot workspace
-    workspace_width = 200
-    workspace_height = 100
+    workspace_width = 180
+    workspace_height = 80
     margin = 0.8
 
     scale_x = (workspace_width * margin) / svg_size[0]
@@ -501,18 +495,6 @@ def svg_to_path(svg_file, num_points_per_path=10, center=(170, 70), z_height=5, 
         x, y = pt
         z = z_height
 
-        # If there's a big gap from the last point, simulate pen lift
-        if last_point is not None:
-            dist = np.linalg.norm(pt - last_point)
-            if dist > gap_threshold:
-                # Lift pen
-                end_effector_points.append([last_point[0], last_point[1], lift_height])
-                platform_positions.append((None, None, None))
-
-                # Rapid move to next point (still lifted)
-                end_effector_points.append([x, y, lift_height])
-                platform_positions.append((None, None, None))
-
         # Normal (lowered) move
         inv_kin = inverse_kinematics(x, y, z)
         if inv_kin:
@@ -520,6 +502,17 @@ def svg_to_path(svg_file, num_points_per_path=10, center=(170, 70), z_height=5, 
             end_effector_points.append([x, y, z])
             platform_positions.append((A, B, C))
             last_point = pt  # Only update if valid
+
+
+        #trim points, the minimum movement is 1mm, if point is less than 1/80mm from the last point, remove it
+        if last_point is not None:
+            dist = np.linalg.norm(pt - last_point)
+            if dist < 0:
+                end_effector_points.pop()
+                platform_positions.pop()
+
+    #print number of points
+    print(f"Number of points: {len(end_effector_points)}")
 
     return end_effector_points, platform_positions
 
@@ -559,38 +552,69 @@ def png_to_svg(png_file, output_file="output.svg"):
     dwg.save()
     return output_file
 
-
-
 def plotPointsIn2D(points):
     x = [point[0] for point in points]
     y = [point[1] for point in points]
     z = [point[2] for point in points]
 
-    #if z = 5, plot in blue, if z = 10, plot in red
-
-    for i in range(len(z)):
-        if z[i] == 5:
-            plt.plot(x[i], y[i], 'bo')
-        elif z[i] > 5:
-            plt.plot(x[i], y[i], 'bo')
-
 
     plt.xlabel('X')
     plt.ylabel('Y')
+
+    plt.plot(x, y)
 
 
     #flip y axis
     plt.gca().invert_yaxis()
     plt.show()
 
+def animatePlot(points):
+    #add the arms and IK to the plot
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
 
-png_to_svg('panik.jpg')
-endeffectorpos, platormpos = svg_to_path("output.svg", num_points_per_path=100)
+    x = [point[0] for point in points]
+    y = [point[1] for point in points]
+    z = [point[2] for point in points]
+
+
+
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+
+    def update(num, x, y, z, line):
+        line.set_data(x[:num], y[:num])
+        line.set_3d_properties(z[:num])
+
+        return line,
+
+    #plot the end effector positions
+    line, = ax.plot(x, y, z, color='r')
+
+    ani = animation.FuncAnimation(fig, update, len(x), fargs=[x, y, z, line], interval=5, blit=True)
+
+    plt.show()
+
+
+
+
+    plt.show()
+
+png_to_svg('jack.jpg')
+endeffectorpos, platormpos = svg_to_path("output.svg", num_points_per_path=50)
+
+#convert all points to ints
+endeffectorpos = [[int(point[0]), int(point[1]), int(point[2])] for point in endeffectorpos]
 
 plotPointsIn2D(endeffectorpos)
 
-print(f"End effector positions: {endeffectorpos}")
+#print the first 10 end effector positions
+print(f"End effector positions: {endeffectorpos[:10]}")
 
 
 #plot_travel([100, 100, 5], [170, 100, 5])
 
+
+#plot_points(endeffectorpos)
+animatePlot(endeffectorpos)
