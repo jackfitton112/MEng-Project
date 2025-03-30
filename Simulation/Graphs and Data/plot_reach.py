@@ -5,7 +5,7 @@ import time
 import os
 
 # Constants
-ARM_LENGTH = 340  # mm
+ARM_LENGTH = 180 # mm
 RAIL_LENGTH = 390  # mm
 
 PLATFORM_WIDTH = 30  # mm
@@ -20,6 +20,8 @@ B_MAX = A_MAX - PLATFORM_WIDTH - MIN_SPACING
 
 C_MIN = B_MIN + PLATFORM_WIDTH + MIN_SPACING
 C_MAX = RAIL_LENGTH - (HALF_PLATFORM_WIDTH + MIN_SPACING)
+
+MAX_X_DELTA = ARM_LENGTH
 
 min_position = (0, 0, 0)
 

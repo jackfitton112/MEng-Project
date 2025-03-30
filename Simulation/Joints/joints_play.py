@@ -2,7 +2,11 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
-
+from svgpathtools import svg2paths2
+from svgpathtools import Path, Line, CubicBezier, QuadraticBezier, Arc
+import os
+import cv2
+import svgwrite
 
 # Constants
 SMALL_ARM_LENGTH = 90  # mm
@@ -23,6 +27,12 @@ B_MAX = A_MAX - PLATFORM_WIDTH - MIN_SPACING
 C_MIN = B_MIN + PLATFORM_WIDTH + MIN_SPACING
 C_MAX = RAIL_LENGTH - (HALF_PLATFORM_WIDTH + MIN_SPACING)
 
+MAX_X_DELTA = ARM_LENGTH
+
+#min and max end effector positions
+# X_MIN = 70, Y_MIN = 25, Z_MIN = 0
+# X_MAX = 300, Y_MAX = 140 , Z_MAX = 60
+
 
 def inverse_kinematics(x, y, z, angle_A=60, angle_B=50, angle_C=60):
     """
@@ -41,6 +51,9 @@ def inverse_kinematics(x, y, z, angle_A=60, angle_B=50, angle_C=60):
     # Ensure carriages remain within rail limits
     if not (A_MIN <= A <= A_MAX and B_MIN <= B <= B_MAX and C_MIN <= C <= C_MAX) or x < 0:
         return None  # Invalid configuration
+    
+    if abs(A - C) > MAX_X_DELTA:
+        return None
 
     return A, B, C
 
@@ -112,6 +125,7 @@ def calcArmJointPosB(start, end, arm_length=SMALL_ARM_LENGTH, start_angle=50):
 
     if d > 2 * arm_length:
         raise ValueError("Target out of reach.")
+    
 
     # Law of cosines to get included angle opposite the elbow joint
     # Triangle: sides = [arm, arm, d]
@@ -125,6 +139,8 @@ def calcArmJointPosB(start, end, arm_length=SMALL_ARM_LENGTH, start_angle=50):
 
     joint_xz = start_xz + np.array([dx, dz])
     joint_position = np.array([joint_xz[0], start[1], joint_xz[1]])  # Fill Y from original start
+
+    #print(f"Joint position: {joint_position}")
 
     return joint_position
 
@@ -318,7 +334,7 @@ def plot_travel(start_endEffectorPos, finish_endEffectorPos):
     ax = fig.add_subplot(111, projection='3d')
 
     #get list of points between the start and end effector positions
-    points = np.linspace(start_endEffectorPos, finish_endEffectorPos, 100)
+    points = np.linspace(start_endEffectorPos, finish_endEffectorPos, 10)
 
     start_A, start_B, start_C = inverse_kinematics(*start_endEffectorPos, angle_A=60, angle_B=50, angle_C=60)
     finish_A, finish_B, finish_C = inverse_kinematics(*finish_endEffectorPos, angle_A=60, angle_B=50, angle_C=60)
@@ -331,34 +347,34 @@ def plot_travel(start_endEffectorPos, finish_endEffectorPos):
     ax.set_zlabel('Z')
 
     # Plot the platforms at the start with low transparency
-    ax.scatter(start_A, 0, 0, c='b', marker='o', label='Platform A Start', alpha=0.3)
-    ax.scatter(start_B, 0, 0, c='g', marker='o', label='Platform B Start', alpha=0.3)
-    ax.scatter(start_C, 0, 0, c='y', marker='o', label='Platform C Start', alpha=0.3)
+    ax.scatter(start_A, 0, 0, c='b', marker='o', label='Platform A Start', alpha=0.1)
+    ax.scatter(start_B, 0, 0, c='g', marker='o', label='Platform B Start', alpha=0.1)
+    ax.scatter(start_C, 0, 0, c='y', marker='o', label='Platform C Start', alpha=0.1)
 
     # plot the start joints with low transparency
-    ax.scatter(startJoint_A[0], startJoint_A[1], startJoint_A[2], c='b', marker='o', label='Joint A Start', alpha=0.3)
-    ax.scatter(startJoint_B[0], startJoint_B[1], startJoint_B[2], c='g', marker='o', label='Joint B Start', alpha=0.3)
-    ax.scatter(startJoint_C[0], startJoint_C[1], startJoint_C[2], c='y', marker='o', label='Joint C Start', alpha=0.3)
+    ax.scatter(startJoint_A[0], startJoint_A[1], startJoint_A[2], c='b', marker='o', label='Joint A Start', alpha=0.1)
+    ax.scatter(startJoint_B[0], startJoint_B[1], startJoint_B[2], c='g', marker='o', label='Joint B Start', alpha=0.1)
+    ax.scatter(startJoint_C[0], startJoint_C[1], startJoint_C[2], c='y', marker='o', label='Joint C Start', alpha=0.1)
 
     #draw lines between the platforms and the joints
-    ax.plot([start_A, startJoint_A[0]], [0, startJoint_A[1]], [0, startJoint_A[2]], color='b', alpha=0.3)
-    ax.plot([start_B, startJoint_B[0]], [0, startJoint_B[1]], [0, startJoint_B[2]], color='g', alpha=0.3)
-    ax.plot([start_C, startJoint_C[0]], [0, startJoint_C[1]], [0, startJoint_C[2]], color='y', alpha=0.3)
+    ax.plot([start_A, startJoint_A[0]], [0, startJoint_A[1]], [0, startJoint_A[2]], color='b', alpha=0.1)
+    ax.plot([start_B, startJoint_B[0]], [0, startJoint_B[1]], [0, startJoint_B[2]], color='g', alpha=0.1)
+    ax.plot([start_C, startJoint_C[0]], [0, startJoint_C[1]], [0, startJoint_C[2]], color='y', alpha=0.1)
 
     #draw lines between the joints and the end effector
-    ax.plot([startJoint_A[0], start_endEffectorPos[0]], [startJoint_A[1], start_endEffectorPos[1]], [startJoint_A[2], start_endEffectorPos[2]], color='b', alpha=0.3)
-    ax.plot([startJoint_B[0], start_endEffectorPos[0]], [startJoint_B[1], start_endEffectorPos[1]], [startJoint_B[2], start_endEffectorPos[2]], color='g', alpha=0.3)
-    ax.plot([startJoint_C[0], start_endEffectorPos[0]], [startJoint_C[1], start_endEffectorPos[1]], [startJoint_C[2], start_endEffectorPos[2]], color='y', alpha=0.3)
+    ax.plot([startJoint_A[0], start_endEffectorPos[0]], [startJoint_A[1], start_endEffectorPos[1]], [startJoint_A[2], start_endEffectorPos[2]], color='b', alpha=0.1)
+    ax.plot([startJoint_B[0], start_endEffectorPos[0]], [startJoint_B[1], start_endEffectorPos[1]], [startJoint_B[2], start_endEffectorPos[2]], color='g', alpha=0.1)
+    ax.plot([startJoint_C[0], start_endEffectorPos[0]], [startJoint_C[1], start_endEffectorPos[1]], [startJoint_C[2], start_endEffectorPos[2]], color='y', alpha=0.1)
 
     # draw the end effector with low transparency
-    ax.scatter(start_endEffectorPos[0], start_endEffectorPos[1], start_endEffectorPos[2], c='r', marker='o', label='Start End Effector', alpha=0.5)
+    ax.scatter(start_endEffectorPos[0], start_endEffectorPos[1], start_endEffectorPos[2], c='r', marker='o', label='Start End Effector', alpha=0.1)
 
     # plot the travel of the end effector
     maxpoints = len(points)
-    increaseTransparency = ( 1 / maxpoints) * 0.7
+    increaseTransparency = ( 1 / maxpoints) * 0.9
     transparencytopup = 0
     for point in points:
-        ax.scatter(point[0], point[1], point[2], c='r', marker='o', alpha=0.3+transparencytopup)
+        ax.scatter(point[0], point[1], point[2], c='r', marker='o', alpha=0.1+transparencytopup)
         transparencytopup += increaseTransparency
 
     #plot end platform and joint positions
@@ -380,10 +396,201 @@ def plot_travel(start_endEffectorPos, finish_endEffectorPos):
 
 
 
+
     ax.scatter(finish_endEffectorPos[0], finish_endEffectorPos[1], finish_endEffectorPos[2], c='b', marker='o', label='Finish End Effector')
 
+    ax.title.set_text(f'End effector travel from {start_endEffectorPos} to {finish_endEffectorPos}')
 
 
-    ax.legend()
+    #ax.legend()
+    #show and set camera angle
+    ax.view_init(elev=20, azim=135)
+
     plt.show()
+
+def plot_points(points):
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+
+    for point in points:
+        ax.scatter(point[0], point[1], point[2], c='r', marker='o')
+
+    #get the last point and plot the joint positions
+    A, B, C = inverse_kinematics(*points[-1], angle_A=60, angle_B=50, angle_C=60)
+    joint_A, joint_B, joint_C = calcJointPos(A, B, C, *points[-1])
+
+    ax.scatter(A, 0, 0, c='b', marker='o', label='Platform A')
+    ax.scatter(B, 0, 0, c='g', marker='o', label='Platform B')
+    ax.scatter(C, 0, 0, c='y', marker='o', label='Platform C')
+
+    ax.scatter(joint_A[0], joint_A[1], joint_A[2], c='b', marker='o', label='Joint A')
+    ax.scatter(joint_B[0], joint_B[1], joint_B[2], c='g', marker='o', label='Joint B')
+    ax.scatter(joint_C[0], joint_C[1], joint_C[2], c='y', marker='o', label='Joint C')
+
+    ax.plot([A, joint_A[0]], [0, joint_A[1]], [0, joint_A[2]], color='b')
+    ax.plot([B, joint_B[0]], [0, joint_B[1]], [0, joint_B[2]], color='g')
+    ax.plot([C, joint_C[0]], [0, joint_C[1]], [0, joint_C[2]], color='y')
+
+    ax.plot([joint_A[0], points[-1][0]], [joint_A[1], points[-1][1]], [joint_A[2], points[-1][2]], color='b')
+    ax.plot([joint_B[0], points[-1][0]], [joint_B[1], points[-1][1]], [joint_B[2], points[-1][2]], color='g')
+    ax.plot([joint_C[0], points[-1][0]], [joint_C[1], points[-1][1]], [joint_C[2], points[-1][2]], color='y')
+
+
+
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+
+    plt.show()
+
+def sample_path(path, num_points):
+    """
+    Manually sample evenly spaced points along a path object.
+    """
+    points = []
+    for i in range(num_points):
+        t = i / (num_points - 1)
+        points.append(path.point(t))
+    return points
+
+def svg_to_path(svg_file, num_points_per_path=10, center=(170, 70), z_height=5, lift_height=15, gap_threshold=2.0):
+    """
+    Parse SVG, scale and center, and return end effector + platform positions.
+    Automatically lifts pen if next point is far from current point (i.e., a gap).
+    """
+    if not os.path.exists(svg_file):
+        raise FileNotFoundError(f"SVG file not found: {svg_file}")
+
+    paths, attributes, svg_attr = svg2paths2(svg_file)
+
+    # Collect all points from all paths into one sequence
+    raw_points = []
+    for path in paths:
+        sampled = sample_path(path, num_points_per_path)
+        raw_points.extend(sampled)
+
+    if not raw_points:
+        raise ValueError("No valid points found in SVG.")
+
+    # Convert to XY array
+    xy_points = np.array([[pt.real, pt.imag] for pt in raw_points])
+
+    # Compute bounding box for scaling and centering
+    min_xy = np.min(xy_points, axis=0)
+    max_xy = np.max(xy_points, axis=0)
+    svg_center = (min_xy + max_xy) / 2
+    svg_size = max_xy - min_xy
+
+    # Fit SVG within robot workspace
+    workspace_width = 200
+    workspace_height = 100
+    margin = 0.8
+
+    scale_x = (workspace_width * margin) / svg_size[0]
+    scale_y = (workspace_height * margin) / svg_size[1]
+    scale = min(scale_x, scale_y)
+
+    # Apply transform: scale and shift to center
+    transformed_points = (xy_points - svg_center) * scale + np.array(center)
+
+    end_effector_points = []
+    platform_positions = []
+
+    last_point = None
+    for pt in transformed_points:
+        x, y = pt
+        z = z_height
+
+        # If there's a big gap from the last point, simulate pen lift
+        if last_point is not None:
+            dist = np.linalg.norm(pt - last_point)
+            if dist > gap_threshold:
+                # Lift pen
+                end_effector_points.append([last_point[0], last_point[1], lift_height])
+                platform_positions.append((None, None, None))
+
+                # Rapid move to next point (still lifted)
+                end_effector_points.append([x, y, lift_height])
+                platform_positions.append((None, None, None))
+
+        # Normal (lowered) move
+        inv_kin = inverse_kinematics(x, y, z)
+        if inv_kin:
+            A, B, C = inv_kin
+            end_effector_points.append([x, y, z])
+            platform_positions.append((A, B, C))
+            last_point = pt  # Only update if valid
+
+    return end_effector_points, platform_positions
+
+def png_to_svg(png_file, output_file="output.svg"):
+    """
+    Convert PNG image to SVG by detecting edges and extracting all contours (inside + outside).
+    """
+    if not os.path.exists(png_file):
+        raise FileNotFoundError(f"PNG file not found: {png_file}")
+
+    # Load image and convert to grayscale
+    img = cv2.imread(png_file)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    # Detect edges
+    edges = cv2.Canny(gray, 100, 200)
+
+    # Save the edges image just for reference/debug
+    cv2.imwrite("edges.png", edges)
+
+    # Find all contours (including internal holes)
+    contours, _ = cv2.findContours(edges, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+
+    # Create SVG with proper size and viewBox
+    height, width = edges.shape
+    dwg = svgwrite.Drawing(output_file, size=(f"{width}px", f"{height}px"))
+    dwg.viewbox(0, 0, width, height)
+
+    for contour in contours:
+        if len(contour) < 3:
+            continue  # Skip very small contours
+
+        # Create SVG path string
+        path_data = "M " + " L ".join([f"{pt[0][0]},{pt[0][1]}" for pt in contour]) + " Z"
+        dwg.add(dwg.path(d=path_data, fill="none", stroke="black", stroke_width=1))
+
+    dwg.save()
+    return output_file
+
+
+
+def plotPointsIn2D(points):
+    x = [point[0] for point in points]
+    y = [point[1] for point in points]
+    z = [point[2] for point in points]
+
+    #if z = 5, plot in blue, if z = 10, plot in red
+
+    for i in range(len(z)):
+        if z[i] == 5:
+            plt.plot(x[i], y[i], 'bo')
+        elif z[i] > 5:
+            plt.plot(x[i], y[i], 'bo')
+
+
+    plt.xlabel('X')
+    plt.ylabel('Y')
+
+
+    #flip y axis
+    plt.gca().invert_yaxis()
+    plt.show()
+
+
+png_to_svg('panik.jpg')
+endeffectorpos, platormpos = svg_to_path("output.svg", num_points_per_path=100)
+
+plotPointsIn2D(endeffectorpos)
+
+print(f"End effector positions: {endeffectorpos}")
+
+
+#plot_travel([100, 100, 5], [170, 100, 5])
 
