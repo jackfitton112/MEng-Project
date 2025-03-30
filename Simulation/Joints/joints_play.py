@@ -167,6 +167,16 @@ def calcArmJointPosAC(start, end, start_angle_deg=60):
     return np.array([elbow_x, elbow_y, elbow_z])
 
 
+def calcJointPos(A, B, C, X, Y, Z):
+
+    #function takes the platform positions and the end effector position and calculates the joint positions
+    joint_A = calcArmJointPosAC([A, 0, 0], [X, Y, Z], start_angle_deg=60)
+    joint_B = calcArmJointPosB([B, 0, 0], [X, Y, Z])
+    joint_C = calcArmJointPosAC([C, 0, 0], [X, Y, Z], start_angle_deg=60)
+
+    return joint_A, joint_B, joint_C
+
+
 def simulate_play(A, B, C, start_angle_deg, arm_length, platform, angle_play=1, samples=10):
     """
     Simulates joint play in both platform and elbow joints.
@@ -200,83 +210,180 @@ def simulate_play(A, B, C, start_angle_deg, arm_length, platform, angle_play=1, 
 
         end_effector_positions.append([X, Y, Z])
 
+    #move the platforms +/- a few mm to simulate play in the belts - lets say +/- 3mm
+    movement_a = np.linspace(A - 3, A + 3, samples)
+    movement_b = np.linspace(B - 3, B + 3, samples)
+    movement_c = np.linspace(C - 3, C + 3, samples)
+
+    for i in range(samples):
+        if platform == 'A':
+            X, Y, Z = forward_kinematics(movement_a[i], B, C, angle_A=angle, angle_B=50, angle_C=angle)
+        elif platform == 'B':
+            X, Y, Z = forward_kinematics(A, movement_b[i], C, angle_A=60, angle_B=50, angle_C=60)
+        elif platform == 'C':
+            X, Y, Z = forward_kinematics(A, B, movement_c[i], angle_A=angle, angle_B=50, angle_C=angle)
+
+        end_effector_positions.append([X, Y, Z])
+
+
     return end_effector_positions
 
+def plot_end_effector_pos(end_position):
+    END = end_position
+    A, B, C = inverse_kinematics(*END, angle_A=60, angle_B=50, angle_C=60)
 
-END = [170, 100, 5]
-A, B, C = inverse_kinematics(*END, angle_A=60, angle_B=50, angle_C=60)
-
-fig = plt.figure()
-ax = fig.add_subplot(111, projection='3d')
-
-
-
-a_joint = calcArmJointPosAC([A, 0, 0], END, start_angle_deg=60)
-b_joint = calcArmJointPosB([B, 0, 0], END)
-c_joint = calcArmJointPosAC([C, 0, 0], END, start_angle_deg=60)
-
-print(f"A {A}, B {B}, C {C}")
-print(f"Joint A: {a_joint} Joint B: {b_joint} Joint C: {c_joint}")
-
-#plot the end effector location and the platform locations (X: 0, Y: A, B, C)
-
-ax.set_xlabel('X')
-ax.set_ylabel('Y')
-ax.set_zlabel('Z')
-
-# Plot the end effector
-ax.scatter(END[0], END[1], END[2], c='r', marker='o', label='End Effector')
-
-# Plot the platforms
-ax.scatter(A, 0, 0, c='b', marker='o', label='Platform A')
-ax.scatter(B, 0, 0, c='g', marker='o', label='Platform B')
-ax.scatter(C, 0, 0, c='y', marker='o', label='Platform C')
-
-# Plot the arm joint
-ax.scatter(a_joint[0], a_joint[1], a_joint[2], c='b', marker='o', label='Joint A')
-ax.scatter(b_joint[0], b_joint[1], b_joint[2], c='g', marker='o', label='Joint B')
-ax.scatter(c_joint[0], c_joint[1], c_joint[2], c='y', marker='o', label='Joint C')
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
 
 
-#draw the lines between the platforms and the joints
-ax.plot([A, a_joint[0]], [0, a_joint[1]], [0, a_joint[2]], color='b')
-ax.plot([B, b_joint[0]], [0, b_joint[1]], [0, b_joint[2]], color='g')
-ax.plot([C, c_joint[0]], [0, c_joint[1]], [0, c_joint[2]], color='y')
+    a_joint = calcArmJointPosAC([A, 0, 0], END, start_angle_deg=60)
+    b_joint = calcArmJointPosB([B, 0, 0], END)
+    c_joint = calcArmJointPosAC([C, 0, 0], END, start_angle_deg=60)
 
-#draw the lines between the joints and the end effector
-ax.plot([a_joint[0], END[0]], [a_joint[1], END[1]], [a_joint[2], END[2]], color='b')
-ax.plot([b_joint[0], END[0]], [b_joint[1], END[1]], [b_joint[2], END[2]], color='g')
-ax.plot([c_joint[0], END[0]], [c_joint[1], END[1]], [c_joint[2], END[2]], color='y')
+    print(f"A {A}, B {B}, C {C}")
+    print(f"Joint A: {a_joint} Joint B: {b_joint} Joint C: {c_joint}")
 
-#simulate error
-all_end_effector_positions = []
-a_err = simulate_play(A, B, C, 60, SMALL_ARM_LENGTH, 'A', angle_play=1, samples=100)
-b_err = simulate_play(A, B, C, 50, SMALL_ARM_LENGTH, 'B', angle_play=1, samples=100)
-c_err = simulate_play(A, B, C, 60, SMALL_ARM_LENGTH, 'C', angle_play=1, samples=100)
+    #plot the end effector location and the platform locations (X: 0, Y: A, B, C)
 
-all_end_effector_positions.extend(a_err)
-all_end_effector_positions.extend(b_err)
-all_end_effector_positions.extend(c_err)
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
 
-#get the min and max values for each axis
-min_x = min([pos[0] for pos in all_end_effector_positions])
-max_x = max([pos[0] for pos in all_end_effector_positions])
+    # Plot the end effector
+    ax.scatter(END[0], END[1], END[2], c='r', marker='o', label='End Effector')
 
-min_y = min([pos[1] for pos in all_end_effector_positions])
-max_y = max([pos[1] for pos in all_end_effector_positions])
+    # Plot the platforms
+    ax.scatter(A, 0, 0, c='b', marker='o', label='Platform A')
+    ax.scatter(B, 0, 0, c='g', marker='o', label='Platform B')
+    ax.scatter(C, 0, 0, c='y', marker='o', label='Platform C')
 
-min_z = min([pos[2] for pos in all_end_effector_positions])
-max_z = max([pos[2] for pos in all_end_effector_positions])
-
-xerr = [[END[0] - min_x], [max_x - END[0]]]
-yerr = [[END[1] - min_y], [max_y - END[1]]]
-zerr = [[END[2] - min_z], [max_z - END[2]]]
-
-print(f"X: {xerr}, Y: {yerr}, Z: {zerr}")
-
-#plot the error bars
-ax.errorbar(END[0], END[1], END[2], xerr=xerr, yerr=yerr, zerr=zerr, fmt='o', color='black', label='End Effector Error')
+    # Plot the arm joint
+    ax.scatter(a_joint[0], a_joint[1], a_joint[2], c='b', marker='o', label='Joint A')
+    ax.scatter(b_joint[0], b_joint[1], b_joint[2], c='g', marker='o', label='Joint B')
+    ax.scatter(c_joint[0], c_joint[1], c_joint[2], c='y', marker='o', label='Joint C')
 
 
-ax.legend()
-plt.show()
+    #draw the lines between the platforms and the joints
+    ax.plot([A, a_joint[0]], [0, a_joint[1]], [0, a_joint[2]], color='b')
+    ax.plot([B, b_joint[0]], [0, b_joint[1]], [0, b_joint[2]], color='g')
+    ax.plot([C, c_joint[0]], [0, c_joint[1]], [0, c_joint[2]], color='y')
+
+    #draw the lines between the joints and the end effector
+    ax.plot([a_joint[0], END[0]], [a_joint[1], END[1]], [a_joint[2], END[2]], color='b')
+    ax.plot([b_joint[0], END[0]], [b_joint[1], END[1]], [b_joint[2], END[2]], color='g')
+    ax.plot([c_joint[0], END[0]], [c_joint[1], END[1]], [c_joint[2], END[2]], color='y')
+
+    #simulate error
+    all_end_effector_positions = []
+    a_err = simulate_play(A, B, C, 60, SMALL_ARM_LENGTH, 'A', angle_play=1, samples=100)
+    b_err = simulate_play(A, B, C, 50, SMALL_ARM_LENGTH, 'B', angle_play=1, samples=100)
+    c_err = simulate_play(A, B, C, 60, SMALL_ARM_LENGTH, 'C', angle_play=1, samples=100)
+
+    all_end_effector_positions.extend(a_err)
+    all_end_effector_positions.extend(b_err)
+    all_end_effector_positions.extend(c_err)
+
+    #get the min and max values for each axis
+    min_x = min([pos[0] for pos in all_end_effector_positions])
+    max_x = max([pos[0] for pos in all_end_effector_positions])
+
+    min_y = min([pos[1] for pos in all_end_effector_positions])
+    max_y = max([pos[1] for pos in all_end_effector_positions])
+
+    min_z = min([pos[2] for pos in all_end_effector_positions])
+    max_z = max([pos[2] for pos in all_end_effector_positions])
+
+    xerr = [[END[0] - min_x], [max_x - END[0]]]
+    yerr = [[END[1] - min_y], [max_y - END[1]]]
+    zerr = [[END[2] - min_z], [max_z - END[2]]]
+
+    print(f"X: {xerr}, Y: {yerr}, Z: {zerr}")
+
+    #plot the error bars
+    ax.errorbar(END[0], END[1], END[2], xerr=xerr, yerr=yerr, zerr=zerr, fmt='o', color='black', label='End Effector Error')
+
+
+    #print the error values
+    print(f"X: {END[0]} +/- {xerr}, Y: {END[1]} +/- {yerr}, Z: {END[2]} +/- {zerr}")
+
+
+
+
+    ax.legend()
+    plt.show()
+
+def plot_travel(start_endEffectorPos, finish_endEffectorPos):
+    #plot the start and end effector locations
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+
+    #get list of points between the start and end effector positions
+    points = np.linspace(start_endEffectorPos, finish_endEffectorPos, 100)
+
+    start_A, start_B, start_C = inverse_kinematics(*start_endEffectorPos, angle_A=60, angle_B=50, angle_C=60)
+    finish_A, finish_B, finish_C = inverse_kinematics(*finish_endEffectorPos, angle_A=60, angle_B=50, angle_C=60)
+
+    startJoint_A, startJoint_B, startJoint_C = calcJointPos(start_A, start_B, start_C, *start_endEffectorPos)
+    finishJoint_A, finishJoint_B, finishJoint_C = calcJointPos(finish_A, finish_B, finish_C, *finish_endEffectorPos)
+
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+
+    # Plot the platforms at the start with low transparency
+    ax.scatter(start_A, 0, 0, c='b', marker='o', label='Platform A Start', alpha=0.3)
+    ax.scatter(start_B, 0, 0, c='g', marker='o', label='Platform B Start', alpha=0.3)
+    ax.scatter(start_C, 0, 0, c='y', marker='o', label='Platform C Start', alpha=0.3)
+
+    # plot the start joints with low transparency
+    ax.scatter(startJoint_A[0], startJoint_A[1], startJoint_A[2], c='b', marker='o', label='Joint A Start', alpha=0.3)
+    ax.scatter(startJoint_B[0], startJoint_B[1], startJoint_B[2], c='g', marker='o', label='Joint B Start', alpha=0.3)
+    ax.scatter(startJoint_C[0], startJoint_C[1], startJoint_C[2], c='y', marker='o', label='Joint C Start', alpha=0.3)
+
+    #draw lines between the platforms and the joints
+    ax.plot([start_A, startJoint_A[0]], [0, startJoint_A[1]], [0, startJoint_A[2]], color='b', alpha=0.3)
+    ax.plot([start_B, startJoint_B[0]], [0, startJoint_B[1]], [0, startJoint_B[2]], color='g', alpha=0.3)
+    ax.plot([start_C, startJoint_C[0]], [0, startJoint_C[1]], [0, startJoint_C[2]], color='y', alpha=0.3)
+
+    #draw lines between the joints and the end effector
+    ax.plot([startJoint_A[0], start_endEffectorPos[0]], [startJoint_A[1], start_endEffectorPos[1]], [startJoint_A[2], start_endEffectorPos[2]], color='b', alpha=0.3)
+    ax.plot([startJoint_B[0], start_endEffectorPos[0]], [startJoint_B[1], start_endEffectorPos[1]], [startJoint_B[2], start_endEffectorPos[2]], color='g', alpha=0.3)
+    ax.plot([startJoint_C[0], start_endEffectorPos[0]], [startJoint_C[1], start_endEffectorPos[1]], [startJoint_C[2], start_endEffectorPos[2]], color='y', alpha=0.3)
+
+    # draw the end effector with low transparency
+    ax.scatter(start_endEffectorPos[0], start_endEffectorPos[1], start_endEffectorPos[2], c='r', marker='o', label='Start End Effector', alpha=0.5)
+
+    # plot the travel of the end effector
+    maxpoints = len(points)
+    increaseTransparency = ( 1 / maxpoints) * 0.7
+    transparencytopup = 0
+    for point in points:
+        ax.scatter(point[0], point[1], point[2], c='r', marker='o', alpha=0.3+transparencytopup)
+        transparencytopup += increaseTransparency
+
+    #plot end platform and joint positions
+    ax.scatter(finish_A, 0, 0, c='b', marker='o', label='Platform A Finish')
+    ax.scatter(finish_B, 0, 0, c='g', marker='o', label='Platform B Finish')
+    ax.scatter(finish_C, 0, 0, c='y', marker='o', label='Platform C Finish')
+
+    ax.scatter(finishJoint_A[0], finishJoint_A[1], finishJoint_A[2], c='b', marker='o', label='Joint A Finish')
+    ax.scatter(finishJoint_B[0], finishJoint_B[1], finishJoint_B[2], c='g', marker='o', label='Joint B Finish')
+    ax.scatter(finishJoint_C[0], finishJoint_C[1], finishJoint_C[2], c='y', marker='o', label='Joint C Finish')
+
+    ax.plot([finish_A, finishJoint_A[0]], [0, finishJoint_A[1]], [0, finishJoint_A[2]], color='b')
+    ax.plot([finish_B, finishJoint_B[0]], [0, finishJoint_B[1]], [0, finishJoint_B[2]], color='g')
+    ax.plot([finish_C, finishJoint_C[0]], [0, finishJoint_C[1]], [0, finishJoint_C[2]], color='y')
+
+    ax.plot([finishJoint_A[0], finish_endEffectorPos[0]], [finishJoint_A[1], finish_endEffectorPos[1]], [finishJoint_A[2], finish_endEffectorPos[2]], color='b')
+    ax.plot([finishJoint_B[0], finish_endEffectorPos[0]], [finishJoint_B[1], finish_endEffectorPos[1]], [finishJoint_B[2], finish_endEffectorPos[2]], color='g')
+    ax.plot([finishJoint_C[0], finish_endEffectorPos[0]], [finishJoint_C[1], finish_endEffectorPos[1]], [finishJoint_C[2], finish_endEffectorPos[2]], color='y')
+
+
+
+    ax.scatter(finish_endEffectorPos[0], finish_endEffectorPos[1], finish_endEffectorPos[2], c='b', marker='o', label='Finish End Effector')
+
+
+
+    ax.legend()
+    plt.show()
+
