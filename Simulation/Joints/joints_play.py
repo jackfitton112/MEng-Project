@@ -8,6 +8,9 @@ from svgpathtools import Path, Line, CubicBezier, QuadraticBezier, Arc
 import os
 import cv2
 import svgwrite
+from svgpathtools import svg2paths2
+from ortools.constraint_solver import pywrapcp, routing_enums_pb2
+from scipy.spatial import distance_matrix
 
 # Constants
 SMALL_ARM_LENGTH = 90  # mm
@@ -47,14 +50,19 @@ def inverse_kinematics(x, y, z, angle_A=60, angle_B=50, angle_C=60):
     # Compute carriage positions
     A = x - y / np.tan(theta_A)
     C = x + y / np.tan(theta_C)
-    B = x - z / np.tan(theta_B)
+    #B = x - z / np.tan(theta_B)
+    B = C - 40
 
     # Ensure carriages remain within rail limits
-    if not (A_MIN <= A <= A_MAX and B_MIN <= B <= B_MAX and C_MIN <= C <= C_MAX) or x < 0:
-        return None  # Invalid configuration
+    #if not (A_MIN <= A <= A_MAX and B_MIN <= B <= B_MAX and C_MIN <= C <= C_MAX) or x < 0:
+     #   return None  # Invalid configuration
     
-    if abs(A - C) > MAX_X_DELTA:
-        return None
+    #check spacing between platforms
+    #if check_collision(A, B, C):
+    #    return None
+    
+    #if abs(A - C) > MAX_X_DELTA:
+      #  return None
 
     return A, B, C
 
@@ -447,11 +455,39 @@ def sample_path(path, num_points):
         points.append(path.point(t))
     return points
 
-def svg_to_path(svg_file, num_points_per_path=10, center=(170, 90), z_height=5, lift_height=15, gap_threshold=2.0):
-    """
-    Parse SVG, scale and center, and return end effector + platform positions.
-    Automatically lifts pen if next point is far from current point (i.e., a gap).
-    """
+
+def solve_tsp(coords):
+    """Solves the TSP for given list of (x, y) coordinates using OR-Tools."""
+    n = len(coords)
+    dist_matrix = distance_matrix(coords, coords).astype(int)
+
+    manager = pywrapcp.RoutingIndexManager(n, 1, 0)
+    routing = pywrapcp.RoutingModel(manager)
+
+    def distance_callback(from_index, to_index):
+        return dist_matrix[manager.IndexToNode(from_index)][manager.IndexToNode(to_index)]
+
+    transit_callback_index = routing.RegisterTransitCallback(distance_callback)
+    routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
+
+    search_params = pywrapcp.DefaultRoutingSearchParameters()
+    search_params.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+    search_params.time_limit.FromSeconds(10)
+
+    solution = routing.SolveWithParameters(search_params)
+    if not solution:
+        raise RuntimeError("TSP solution not found")
+
+    index = routing.Start(0)
+    tsp_order = []
+    while not routing.IsEnd(index):
+        tsp_order.append(manager.IndexToNode(index))
+        index = solution.Value(routing.NextVar(index))
+
+    return tsp_order
+
+def svg_to_path(svg_file, num_points_per_path=10, center=(170, 165), z_height=5, lift_height=5, gap_threshold=2.0):
+
     if not os.path.exists(svg_file):
         raise FileNotFoundError(f"SVG file not found: {svg_file}")
 
@@ -476,8 +512,8 @@ def svg_to_path(svg_file, num_points_per_path=10, center=(170, 90), z_height=5, 
     svg_size = max_xy - min_xy
 
     # Fit SVG within robot workspace
-    workspace_width = 180
-    workspace_height = 80
+    workspace_width = 150
+    workspace_height = 60
     margin = 0.8
 
     scale_x = (workspace_width * margin) / svg_size[0]
@@ -487,34 +523,69 @@ def svg_to_path(svg_file, num_points_per_path=10, center=(170, 90), z_height=5, 
     # Apply transform: scale and shift to center
     transformed_points = (xy_points - svg_center) * scale + np.array(center)
 
+    # Solve TSP to reorder points
+    tsp_order = solve_tsp(transformed_points)
+    optimized_points = transformed_points[tsp_order]
+
     end_effector_points = []
     platform_positions = []
-
     last_point = None
-    for pt in transformed_points:
+
+    for pt in optimized_points:
         x, y = pt
-        z = z_height
 
-        # Normal (lowered) move
-        inv_kin = inverse_kinematics(x, y, z)
-        if inv_kin:
-            A, B, C = inv_kin
-            end_effector_points.append([x, y, z])
-            platform_positions.append((A, B, C))
-            last_point = pt  # Only update if valid
-
-
-        #trim points, the minimum movement is 1mm, if point is less than 1/80mm from the last point, remove it
         if last_point is not None:
             dist = np.linalg.norm(pt - last_point)
-            if dist < 0:
-                end_effector_points.pop()
-                platform_positions.pop()
+            if dist > gap_threshold:
+                # Pen up
+                inv_up = inverse_kinematics(*last_point, lift_height)
+                if inv_up:
+                    A, B, C = inv_up
+                    B = int(C) - 50
+                    platform_positions.append((int(A), int(B), int(C)))
+                    end_effector_points.append([last_point[0], last_point[1], lift_height])
 
-    #print number of points
-    print(f"Number of points: {len(end_effector_points)}")
+                # Move above next point
+                inv_down = inverse_kinematics(x, y, lift_height)
+                if inv_down:
+                    A, B, C = inv_down
+                    B = int(C) - 50
+                    platform_positions.append((int(A), int(B), int(C)))
+                    end_effector_points.append([x, y, lift_height])
+
+        # Pen down
+        inv_kin = inverse_kinematics(x, y, z_height)
+        if inv_kin:
+            A, B, C = inv_kin
+            B = int(C) - 50
+            platform_positions.append((int(A), int(B), int(C)))
+            end_effector_points.append([x, y, z_height])
+            last_point = pt
+
+    # Save end effector points
+    with open('commands.csv', 'w') as f:
+        written = set()
+        for X, Y, Z in end_effector_points:
+            X, Y, Z = int(X), int(Y), int(Z)
+            line = f"{X},{Y},{Z}"
+            if line not in written:
+                f.write(f"{line}\n")
+                written.add(line)
+
+    # Save platform positions
+    with open('platform_positions.csv', 'w') as f:
+        written = set()
+        for A, B, C in platform_positions:
+            line = f"{A},{B},{C}"
+            if line not in written:
+                f.write(f"{line}\n")
+                written.add(line)
+
+    print(f"Number of unique end effector points: {len(end_effector_points)}")
+    print(f"Number of unique platform positions: {len(platform_positions)}")
 
     return end_effector_points, platform_positions
+
 
 def png_to_svg(png_file, output_file="output.svg"):
     """
@@ -601,20 +672,15 @@ def animatePlot(points):
 
     plt.show()
 
-png_to_svg('jack.jpg')
-endeffectorpos, platormpos = svg_to_path("output.svg", num_points_per_path=50)
+png_to_svg('pics/TRIPTERON.png')
+endeffectorpos, platormpos = svg_to_path("output.svg", num_points_per_path=75)
 
 #convert all points to ints
 endeffectorpos = [[int(point[0]), int(point[1]), int(point[2])] for point in endeffectorpos]
 
-plotPointsIn2D(endeffectorpos)
 
-#print the first 10 end effector positions
-print(f"End effector positions: {endeffectorpos[:10]}")
+plot_points(endeffectorpos)
 
-
-#plot_travel([100, 100, 5], [170, 100, 5])
+print(platormpos)
 
 
-#plot_points(endeffectorpos)
-animatePlot(endeffectorpos)
