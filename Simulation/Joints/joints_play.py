@@ -512,7 +512,7 @@ def svg_to_path(svg_file, num_points_per_path=10, center=(170, 165), z_height=5,
     svg_size = max_xy - min_xy
 
     # Fit SVG within robot workspace
-    workspace_width = 150
+    workspace_width = 100
     workspace_height = 60
     margin = 0.8
 
@@ -672,15 +672,5 @@ def animatePlot(points):
 
     plt.show()
 
-png_to_svg('pics/TRIPTERON.png')
-endeffectorpos, platormpos = svg_to_path("output.svg", num_points_per_path=75)
-
-#convert all points to ints
-endeffectorpos = [[int(point[0]), int(point[1]), int(point[2])] for point in endeffectorpos]
-
-
-plot_points(endeffectorpos)
-
-print(platormpos)
 
 

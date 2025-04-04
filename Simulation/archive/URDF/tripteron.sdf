@@ -1,0 +1,103 @@
+<?xml version='1.0'?>
+<sdf version='1.7'>
+  <model name='Tripteron'>
+    
+    <static>false</static>
+    
+    <!-- Base Link -->
+    <link name='base_link'>
+      <visual name='base_link_visual'>
+        <geometry>
+          <cylinder>
+            <radius>0.05</radius>
+            <length>3.9</length>
+          </cylinder>
+        </geometry>
+        <material><ambient>0 0 1 1</ambient></material>
+        <pose>0 0 0.2 1.5708 0 1.5708</pose>
+      </visual>
+    </link>
+
+    <!-- Platforms (link1, link2, link3), sliders -->
+    <link name='link1'>
+      <visual name='visual'>
+        <geometry>
+          <box><size>0.3 0.6 0.05</size></box>
+        </geometry>
+        <material><ambient>1 0 0 1</ambient></material>
+      </visual>
+      <pose>0.5 0 0.3 0 0 0</pose>
+    </link>
+    
+    <link name='link2'>
+      <visual name='visual'>
+        <geometry>
+          <box><size>0.3 0.6 0.05</size></box>
+        </geometry>
+        <material><ambient>0 1 0 1</ambient></material>
+      </visual>
+      <pose>0 0 0.3 0 0 0</pose>
+    </link>
+    
+    <link name='link3'>
+      <visual name='visual'>
+        <geometry>
+          <box><size>0.3 0.6 0.05</size></box>
+        </geometry>
+        <material><ambient>1 1 0 1</ambient></material>
+      </visual>
+      <pose>-0.5 0 0.3 0 0 0</pose>
+    </link>
+
+    <!-- End-Effector -->
+    <link name='end_effector'>
+      <visual name='visual'>
+        <geometry>
+          <sphere><radius>0.1</radius></sphere>
+        </geometry>
+        <material><ambient>0 0 1 1</ambient></material>
+      </visual>
+      <pose>0 0 -1.5 0 0 0</pose>
+    </link>
+
+    <!-- Joints: Base to Platforms -->
+    <joint name='joint1' type='prismatic'>
+      <parent>base_link</parent><child>link1</child>
+      <axis><xyz>1 0 0</xyz><limit><lower>-1.95</lower><upper>1.95</upper></limit></axis>
+    </joint>
+    <joint name='joint2' type='prismatic'>
+      <parent>base_link</parent><child>link2</child>
+      <axis><xyz>1 0 0</xyz><limit><lower>-1.95</lower><upper>1.95</upper></limit></axis>
+    </joint>
+    <joint name='joint3' type='prismatic'>
+      <parent>base_link</parent><child>link3</child>
+      <axis><xyz>1 0 0</xyz><limit><lower>-1.95</lower><upper>1.95</upper></limit></axis>
+    </joint>
+
+    <!-- Arms and Parallel joints -->
+    <!-- Left arm -->
+    <joint name='left_arm_joint' type='universal'>
+      <parent>link1</parent><child>end_effector</child>
+      <pose>0.5 0 0.3 0 0 0</pose>
+      <axis><xyz>1 0 0</xyz></axis>
+      <axis2><xyz>0 1 0</xyz></axis2>
+    </joint>
+
+    <!-- Middle arm -->
+    <joint name='mid_arm_joint' type='universal'>
+      <parent>link2</parent><child>end_effector</child>
+      <pose>0 0 0.3 0 0 0.8727</pose>
+      <axis><xyz>1 0 0</xyz></axis>
+      <axis2><xyz>0 1 0</xyz></axis2>
+    </joint>
+
+    <!-- Right arm -->
+    <joint name='right_arm_joint' type='universal'>
+      <parent>link3</parent><child>end_effector</child>
+      <pose>-0.5 0 0.3 0 0 0</pose>
+      <axis><xyz>1 0 0</xyz></axis>
+      <axis2><xyz>0 1 0</xyz></axis2>
+    </joint>
+
+  </model>
+</sdf>
