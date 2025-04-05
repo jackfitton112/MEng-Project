@@ -1,10 +1,14 @@
-from getElbow import getElbowLocations
+from getElbow import getElbowLocations, generate_perturbed_points_around_axis, find_third_point_triangle
 from kinematics import inverse_kinematics, forward_kinematics
 from plotScene import plot_scene
+from tripteron import Tripteron
 
 import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
+
+#define a new tripteron object
+tripteron = Tripteron(120, 0, 190)
 
 
 ARM_LENGTH_SMALL = 90  # mm
@@ -24,25 +28,6 @@ B_MAX = A_MAX - PLATFORM_WIDTH - MIN_SPACING
 C_MIN = B_MIN + PLATFORM_WIDTH + MIN_SPACING
 C_MAX = RAIL_LENGTH - (HALF_PLATFORM_WIDTH + MIN_SPACING)
 
-
-X = 170
-Y = 100
-Z = 0
-
-A, B, C = inverse_kinematics(X,Y,Z)
-
-print("A: ", A)
-print("C: ", C)
-
-# Get elbow 
-elbowA, elbowC = getElbowLocations(A, B, C, np.array([X,Y,Z]))
-
-print("Elbow A: ", elbowA)
-print("Elbow C: ", elbowC)
-
-
-
-
-
-
-
+tripteron.printValues()
+tripteron.plot(filename="tripteron.png")
+tripteron.plot_error(filename="tripteron_error.png")

@@ -25,81 +25,160 @@ C_MAX = RAIL_LENGTH - (HALF_PLATFORM_WIDTH + MIN_SPACING)
 #C = np.array([210, 0, 0])
 #end = np.array([170, 70, 5])
 
+def find_third_point_triangle(A, C, side_ab=ARM_LENGTH_SMALL, side_bc=ARM_LENGTH_SMALL, prefer_above=True):
+    """
+    Given two points A and C, and distances from a third point B to A and C,
+    compute the coordinates of B that form a triangle ABC.
+
+    The result lies in the plane perpendicular to vector AC, centered at the midpoint,
+    and can be mirrored to lie 'above' or 'below' the AC line based on Z.
+
+    Parameters:
+        A (np.array): Point A, shape (3,)
+        C (np.array): Point C, shape (3,)
+        side_ab (float): Distance from A to B
+        side_bc (float): Distance from C to B
+        prefer_above (bool): If True, return the B point with Z >= midpoint Z
+
+    Returns:
+        np.array: Coordinates of point B (3D)
+    """
+    # Vector from A to C
+    vec_ac = C - A
+    dist_ac = np.linalg.norm(vec_ac)
+
+    # Triangle inequality check
+    if dist_ac > (side_ab + side_bc):
+        print(f"Invalid triangle: AC ({dist_ac}) is longer than AB ({side_ab}) + BC ({side_bc})")
+        #raise ValueError("Invalid triangle: AC is longer than AB + BC")
+
+    # Midpoint of AC
+    midpoint = (A + C) / 2
+
+    # Height from midpoint to B using Pythagoras
+    half_ac = dist_ac / 2
+    height = np.sqrt(side_ab**2 - half_ac**2)
+
+    # Unit vector from A to C
+    vec_ac_norm = vec_ac / dist_ac
+
+    # Get a perpendicular vector
+    temp_vec = np.array([1, 0, 0]) if not np.allclose(vec_ac_norm, [1, 0, 0]) else np.array([0, 1, 0])
+    perp_vec = np.cross(vec_ac_norm, temp_vec)
+    perp_vec = perp_vec / np.linalg.norm(perp_vec)
+
+    # Candidate point
+    B1 = midpoint + perp_vec * height
+    B2 = midpoint - perp_vec * height
+
+    #return (B1 or B2) and midpoint
+
+    returnData = {"midpoint": midpoint, "startPoint": A, "endPoint": C}
+
+    # Choose based on Z preference
+    if prefer_above:
+        if B1[2] >= midpoint[2]:
+            returnData["point"] = B1
+        else:
+            returnData["point"] = B2
+        
+    else:
+        if B1[2] < midpoint[2]:
+            returnData["point"] = B1
+        else:
+            returnData["point"] = B2
+
+
+    return returnData
+        
+
+
+def generate_perturbed_points_around_axis(triangle_data, angle_offsets_deg=list(range(1, 3))):
+    """
+    Rotates a triangle point around the AC axis, centered at the triangle's midpoint,
+    by specified angle offsets to simulate angular deviation.
+
+    Parameters:
+        triangle_data (dict): Output of find_third_point_triangle(), must contain:
+                              - 'point': the elbow/joint point (B)
+                              - 'midpoint': midpoint between A and C
+                              - 'startPoint': point A
+                              - 'endPoint': point C
+        angle_offsets_deg (list): List of angles in degrees to rotate.
+
+    Returns:
+        dict: {
+            angle: (rotated_pos_point, rotated_neg_point)
+        }
+    """
+    point = triangle_data["point"]
+    midpoint = triangle_data["midpoint"]
+    axis = triangle_data["endPoint"] - triangle_data["startPoint"]
+    axis = axis / np.linalg.norm(axis)  # Normalize rotation axis
+    radius_vector = point - midpoint    # Vector from midpoint to point
+
+    # Get perpendicular vectors in rotation plane
+    temp = np.array([1, 0, 0]) if not np.allclose(axis, [1, 0, 0]) else np.array([0, 1, 0])
+    perp1 = np.cross(axis, temp)
+    perp1 /= np.linalg.norm(perp1)
+    perp2 = np.cross(axis, perp1)
+
+    # Project radius vector into the plane
+    x = np.dot(radius_vector, perp1)
+    y = np.dot(radius_vector, perp2)
+
+    perturbed_points = {}
+
+    for angle in angle_offsets_deg:
+        rad = np.radians(angle)
+
+        # Rotation in the perp1/perp2 plane
+        x_pos = np.cos(rad) * x - np.sin(rad) * y
+        y_pos = np.sin(rad) * x + np.cos(rad) * y
+
+        x_neg = np.cos(-rad) * x - np.sin(-rad) * y
+        y_neg = np.sin(-rad) * x + np.cos(-rad) * y
+
+        pos_point = midpoint + x_pos * perp1 + y_pos * perp2
+        neg_point = midpoint + x_neg * perp1 + y_neg * perp2
+
+        perturbed_points[angle] = (pos_point, neg_point)
+
+    return perturbed_points
+
 
 def getElbowLocations(platformA, platformB, platformC, endEffector):
-    side_a = ARM_LENGTH_SMALL  # elbow → end effector
-    side_b = ARM_LENGTH_SMALL  # elbow → platform
 
-    platforms = [platformA, platformC]
+    #Platforms A, B and C are all on the X axis, Y and Z are 0
+    A = np.array([platformA, 0, 0])
+    B = np.array([platformB, 0, 0])
+    C = np.array([platformC, 0, 0])
 
+    # endEffector is the end effector position (x, y, z)
+    end = np.array(endEffector)
 
-    def solveForElbow(A, B):
-        def objective(p):
-            C = np.array(p)
-            CA = C - A
-            CB = C - B
-            return abs(np.dot(CA, CB))  # want 90 deg → dot = 0
+    platforms = [A, B, C]
+    elbows = []
 
-        def constraint_ca(p):
-            return np.linalg.norm(np.array(p) - A) - side_b
+    for platform in platforms:
 
-        def constraint_cb(p):
-            return np.linalg.norm(np.array(p) - B) - side_a
+        elbowPoint = find_third_point_triangle(platform, endEffector, ARM_LENGTH_SMALL, ARM_LENGTH_SMALL, prefer_above=True)
 
-        constraints = [
-            {'type': 'eq', 'fun': constraint_ca},
-            {'type': 'eq', 'fun': constraint_cb}
-        ]
+        elbowPoint = elbowPoint["point"]
 
-        initial_guess = (A + B) / 2 + np.array([0, 0, 90])
+        # Check if elbow point is valid
+        if np.any(np.isnan(elbowPoint)):
+            print("Invalid elbow point")
+            return None
+        
+        elbows.append(elbowPoint)
+        
 
-        #increase max iterations to 1000
-        result = minimize(objective, initial_guess, constraints=constraints, method='SLSQP', options={'maxiter': 10000})
+        
 
-        if not result.success:
-            print(f"Optimization failed: {result.message}")
-        return result.x
-
-    elbowA = solveForElbow(platformA, endEffector)
-    #elbowB = calcArmJointPosB(platformB, endEffector, arm_length=ARM_LENGTH_SMALL, start_angle=50)
-    elbowC = solveForElbow(platformC, endEffector)
-
-    print("\n--- Elbow Locations ---")
-    print(f"Elbow A: {elbowA}")
-    print(f"Elbow C: {elbowC}")
-    print("-----------------------")
-
-    elbows = [elbowA, elbowC]
-
-    # Print segment lengths to verify constraints
-    print("\n--- Segment Lengths ---")
-    for i in range(2):
-        platform = platforms[i]
-        elbow = elbows[i]
-
-        length_platform_to_elbow = np.linalg.norm(elbow - platform)
-        length_elbow_to_effector = np.linalg.norm(endEffector - elbow)
-
-        print(f"Arm {i+1}:")
-        print(f"  Platform → Elbow:     {length_platform_to_elbow:.4f}")
-        print(f"  Elbow → End Effector: {length_elbow_to_effector:.4f}")
-
-    print("\n-----------------------")
-
-    #print the angles between the segments
-    print("\n--- Angles Between Segments ---")
-    for i in range(2):
-        platform = platforms[i]
-        elbow = elbows[i]
-
-        length_platform_to_elbow = np.linalg.norm(elbow - platform)
-        length_elbow_to_effector = np.linalg.norm(endEffector - elbow)
-
-        cos_angle = (length_platform_to_elbow ** 2 + length_elbow_to_effector ** 2 - side_a ** 2) / (2 * length_platform_to_elbow * length_elbow_to_effector)
-        angle = np.arccos(cos_angle) * (180 / np.pi)
-
-        print(f"Arm {i+1}:")
-        print(f"  Angle: {angle:.4f} degrees")
-
+  
+    
     return elbows
+            
+
 

@@ -47,14 +47,24 @@ def plot_scene(A, B, C, end_effector):
     # plot the end effector
     ax.scatter(end_effector[0], end_effector[1], end_effector[2], c='y', marker='o', label='End Effector')
 
-    elbowA, elbowC = getElbowLocations(A, B, C, end_effector)
+    elbowA, elbowB, elbowC = getElbowLocations(A, B, C, end_effector)
 
     # plot the elbow points
     ax.scatter(elbowA[0], elbowA[1], elbowA[2], c='c', marker='o', label='Elbow A')
+    #ax.scatter(elbowB[0], elbowB[1], elbowB[2], c='k', marker='o', label='Elbow B')
     ax.scatter(elbowC[0], elbowC[1], elbowC[2], c='m', marker='o', label='Elbow C')
 
-    print("Elbow A: ", elbowA)
-    print("Elbow C: ", elbowC)
+    # Draw lines between A, B, C and the end effector
+    ax.plot([A, elbowA[0]], [0, elbowA[1]], [0, elbowA[2]], c='c', label='Arm A')
+    #ax.plot([B, elbowB[0]], [0, elbowB[1]], [0, elbowB[2]], c='k', label='Arm B')
+    ax.plot([C, elbowC[0]], [0, elbowC[1]], [0, elbowC[2]], c='m', label='Arm C')
+
+    # Draw lines between the elbows and the end effector
+    ax.plot([elbowA[0], end_effector[0]], [elbowA[1], end_effector[1]], [elbowA[2], end_effector[2]], c='c', label='Elbow A to End Effector')
+    #ax.plot([elbowB[0], end_effector[0]], [elbowB[1], end_effector[1]], [elbowB[2], end_effector[2]], c='y', label='Elbow B to End Effector')
+    ax.plot([elbowC[0], end_effector[0]], [elbowC[1], end_effector[1]], [elbowC[2], end_effector[2]], c='m', label='Elbow C to End Effector')
+
+
 
 
     plt.show()
