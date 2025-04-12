@@ -11,6 +11,7 @@ import svgwrite
 from svgpathtools import svg2paths2
 from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 from scipy.spatial import distance_matrix
+from random import randint
 
 # Constants
 SMALL_ARM_LENGTH = 90  # mm
@@ -33,6 +34,10 @@ C_MAX = RAIL_LENGTH - (HALF_PLATFORM_WIDTH + MIN_SPACING)
 
 MAX_X_DELTA = ARM_LENGTH
 
+START = (130, 60, 0)
+MAX_WIDTH = 100
+MAX_HEIGHT = 60
+
 #min and max end effector positions
 # X_MIN = 70, Y_MIN = 25, Z_MIN = 0
 # X_MAX = 300, Y_MAX = 140 , Z_MAX = 60
@@ -51,7 +56,7 @@ def inverse_kinematics(x, y, z, angle_A=60, angle_B=50, angle_C=60):
     A = x - y / np.tan(theta_A)
     C = x + y / np.tan(theta_C)
     #B = x - z / np.tan(theta_B)
-    B = C - 40
+    B =  (C-A) / 2 + A
 
     # Ensure carriages remain within rail limits
     #if not (A_MIN <= A <= A_MAX and B_MIN <= B <= B_MAX and C_MIN <= C <= C_MAX) or x < 0:
@@ -411,15 +416,22 @@ def plot_points(points):
 
     x_points = [point[0] for point in points]
     y_points = [point[1] for point in points]
-    z_points = [point[2] for point in points]
+
+    try:
+        z_points = [point[2] for point in points]
+    except:
+        z_points = [0 for point in points]
+
+    #print(f"X: {x_points}, Y: {y_points}, Z: {z_points}")
+    print(f"len X: {len(x_points)}, len Y: {len(y_points)}, len Z: {len(z_points)}")
 
     ax.plot(x_points, y_points, z_points)
 
 
-
+    last_XYZ = x_points[-1], y_points[-1], z_points[-1]
     #get the last point and plot the joint positions
-    A, B, C = inverse_kinematics(*points[-1], angle_A=60, angle_B=50, angle_C=60)
-    joint_A, joint_B, joint_C = calcJointPos(A, B, C, *points[-1])
+    A, B, C = inverse_kinematics(*last_XYZ, angle_A=60, angle_B=50, angle_C=60)
+    joint_A, joint_B, joint_C = calcJointPos(A, B, C, *last_XYZ)
 
     ax.scatter(A, 0, 0, c='b', marker='o', label='Platform A')
     ax.scatter(B, 0, 0, c='g', marker='o', label='Platform B')
@@ -433,9 +445,9 @@ def plot_points(points):
     ax.plot([B, joint_B[0]], [0, joint_B[1]], [0, joint_B[2]], color='g')
     ax.plot([C, joint_C[0]], [0, joint_C[1]], [0, joint_C[2]], color='y')
 
-    ax.plot([joint_A[0], points[-1][0]], [joint_A[1], points[-1][1]], [joint_A[2], points[-1][2]], color='b')
-    ax.plot([joint_B[0], points[-1][0]], [joint_B[1], points[-1][1]], [joint_B[2], points[-1][2]], color='g')
-    ax.plot([joint_C[0], points[-1][0]], [joint_C[1], points[-1][1]], [joint_C[2], points[-1][2]], color='y')
+   # ax.plot([joint_A[0], points[-1][0]], [joint_A[1], points[-1][1]], [joint_A[2], points[-1][2]], color='b')
+    #ax.plot([joint_B[0], points[-1][0]], [joint_B[1], points[-1][1]], [joint_B[2], points[-1][2]], color='g')
+    #ax.plot([joint_C[0], points[-1][0]], [joint_C[1], points[-1][1]], [joint_C[2], points[-1][2]], color='y')
 
 
 
@@ -455,45 +467,58 @@ def sample_path(path, num_points):
         points.append(path.point(t))
     return points
 
+def solve_tsp(points):
 
-def solve_tsp(coords):
-    """Solves the TSP for given list of (x, y) coordinates using OR-Tools."""
-    n = len(coords)
-    dist_matrix = distance_matrix(coords, coords).astype(int)
+    #points = [(X,Y,Z), ...]
 
-    manager = pywrapcp.RoutingIndexManager(n, 1, 0)
+    #start at the start point
+    start = START
+
+    # Create a distance matrix
+    dist_matrix = distance_matrix(points, points)
+    # Create the routing index manager
+    manager = pywrapcp.RoutingIndexManager(len(points), 1, 0)
+    # Create Routing Model
     routing = pywrapcp.RoutingModel(manager)
 
+    # Create and register a transit callback
     def distance_callback(from_index, to_index):
-        return dist_matrix[manager.IndexToNode(from_index)][manager.IndexToNode(to_index)]
 
+        # Returns the distance between the two nodes
+        from_node = manager.IndexToNode(from_index)
+        to_node = manager.IndexToNode(to_index)
+        return dist_matrix[from_node][to_node]
+    
     transit_callback_index = routing.RegisterTransitCallback(distance_callback)
     routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
+    # Set search parameters
+    search_parameters = pywrapcp.DefaultRoutingSearchParameters()
+    search_parameters.first_solution_strategy = (
+        routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION
+    )
 
-    search_params = pywrapcp.DefaultRoutingSearchParameters()
-    search_params.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
-    search_params.time_limit.FromSeconds(10)
+    # Solve the problem
+    solution = routing.SolveWithParameters(search_parameters)
 
-    solution = routing.SolveWithParameters(search_params)
     if not solution:
-        raise RuntimeError("TSP solution not found")
-
+        raise Exception("No solution found!")
+    # Extract the route
     index = routing.Start(0)
+
     tsp_order = []
     while not routing.IsEnd(index):
         tsp_order.append(manager.IndexToNode(index))
         index = solution.Value(routing.NextVar(index))
-
+    tsp_order.append(manager.IndexToNode(index))  # Add the end node
     return tsp_order
 
-def svg_to_path(svg_file, num_points_per_path=10, center=(170, 165), z_height=5, lift_height=5, gap_threshold=2.0):
 
+def svg_to_path(svg_file, num_points_per_path=10, center=(180, 90), z_height=0, lift_height=0, gap_threshold=2.0):
     if not os.path.exists(svg_file):
         raise FileNotFoundError(f"SVG file not found: {svg_file}")
 
     paths, attributes, svg_attr = svg2paths2(svg_file)
 
-    # Collect all points from all paths into one sequence
     raw_points = []
     for path in paths:
         sampled = sample_path(path, num_points_per_path)
@@ -502,28 +527,29 @@ def svg_to_path(svg_file, num_points_per_path=10, center=(170, 165), z_height=5,
     if not raw_points:
         raise ValueError("No valid points found in SVG.")
 
-    # Convert to XY array
+    # Convert complex to 2D points
     xy_points = np.array([[pt.real, pt.imag] for pt in raw_points])
 
-    # Compute bounding box for scaling and centering
+    # Compute SVG bounds
     min_xy = np.min(xy_points, axis=0)
     max_xy = np.max(xy_points, axis=0)
     svg_center = (min_xy + max_xy) / 2
     svg_size = max_xy - min_xy
 
-    # Fit SVG within robot workspace
+    # Define workspace limits
     workspace_width = 100
     workspace_height = 60
-    margin = 0.8
+    margin = 0.95
 
+    # Compute scale factor
     scale_x = (workspace_width * margin) / svg_size[0]
     scale_y = (workspace_height * margin) / svg_size[1]
     scale = min(scale_x, scale_y)
 
-    # Apply transform: scale and shift to center
+    # Transform to center and scale
     transformed_points = (xy_points - svg_center) * scale + np.array(center)
 
-    # Solve TSP to reorder points
+    # Solve TSP or just preserve path order (optional)
     tsp_order = solve_tsp(transformed_points)
     optimized_points = transformed_points[tsp_order]
 
@@ -531,38 +557,44 @@ def svg_to_path(svg_file, num_points_per_path=10, center=(170, 165), z_height=5,
     platform_positions = []
     last_point = None
 
+    def add_xyz_and_platform(x, y, z):
+        inv = inverse_kinematics(x, y, z)
+        if inv:
+            A, B, C = inv
+            B = int(C) - 50  # correction for your mechanical offset
+            platform_positions.append((int(A), int(B), int(C)))
+            end_effector_points.append([x, y, z])
+            return True
+        return False
+
+    # Force starting point
+    add_xyz_and_platform(130, 60, lift_height)
+    add_xyz_and_platform(130, 60, z_height)
+    last_point = np.array([130, 60])
+
+    # Main path
     for pt in optimized_points:
         x, y = pt
+        current = np.array([x, y])
 
         if last_point is not None:
-            dist = np.linalg.norm(pt - last_point)
+            dist = np.linalg.norm(current - last_point)
             if dist > gap_threshold:
-                # Pen up
-                inv_up = inverse_kinematics(*last_point, lift_height)
-                if inv_up:
-                    A, B, C = inv_up
-                    B = int(C) - 50
-                    platform_positions.append((int(A), int(B), int(C)))
-                    end_effector_points.append([last_point[0], last_point[1], lift_height])
+                # Pen up and move above next point
+                add_xyz_and_platform(*last_point, lift_height)
+                add_xyz_and_platform(x, y, lift_height)
 
-                # Move above next point
-                inv_down = inverse_kinematics(x, y, lift_height)
-                if inv_down:
-                    A, B, C = inv_down
-                    B = int(C) - 50
-                    platform_positions.append((int(A), int(B), int(C)))
-                    end_effector_points.append([x, y, lift_height])
+        if add_xyz_and_platform(x, y, z_height):
+            last_point = current
 
-        # Pen down
-        inv_kin = inverse_kinematics(x, y, z_height)
-        if inv_kin:
-            A, B, C = inv_kin
-            B = int(C) - 50
-            platform_positions.append((int(A), int(B), int(C)))
-            end_effector_points.append([x, y, z_height])
-            last_point = pt
+    # End gesture
+    final_path = [
+        (130, 60, z_height),
+    ]
+    for x, y, z in final_path:
+        add_xyz_and_platform(x, y, z)
 
-    # Save end effector points
+    # Write output files
     with open('commands.csv', 'w') as f:
         written = set()
         for X, Y, Z in end_effector_points:
@@ -572,7 +604,6 @@ def svg_to_path(svg_file, num_points_per_path=10, center=(170, 165), z_height=5,
                 f.write(f"{line}\n")
                 written.add(line)
 
-    # Save platform positions
     with open('platform_positions.csv', 'w') as f:
         written = set()
         for A, B, C in platform_positions:
@@ -585,7 +616,6 @@ def svg_to_path(svg_file, num_points_per_path=10, center=(170, 165), z_height=5,
     print(f"Number of unique platform positions: {len(platform_positions)}")
 
     return end_effector_points, platform_positions
-
 
 def png_to_svg(png_file, output_file="output.svg"):
     """
@@ -663,7 +693,7 @@ def animatePlot(points):
     #plot the end effector positions
     line, = ax.plot(x, y, z, color='r')
 
-    ani = animation.FuncAnimation(fig, update, len(x), fargs=[x, y, z, line], interval=5, blit=True)
+    ani = animation.FuncAnimation(fig, update, len(x), fargs=[x, y, z, line], interval=50, blit=True)
 
     plt.show()
 
@@ -672,5 +702,235 @@ def animatePlot(points):
 
     plt.show()
 
+def png_vertex_detection(filename):
+    # Load image
+    img = cv2.imread(filename)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    # Detect edges
+    edges = cv2.Canny(gray, 100, 200)
+
+    # Find contours
+    edges = cv2.dilate(edges, None, iterations=2)
+
+    contours, _ = cv2.findContours(edges, cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE)
+
+    #approximate contours to polygons and get the vertices
+    approx_contours = [cv2.approxPolyDP(cnt, 0.02 * cv2.arcLength(cnt, True), True) for cnt in contours]
+
+    points = []
+
+    # Draw contours and vertices
+    r = 0
+    b = 0
+    g = 0
+    i = 0
+    output = {}
+
+    for cnt in approx_contours:
+
+        output[i] = []
+
+        #random color for each contour
+        r = randint(0, 255)
+        g = randint(0, 255)
+        b = randint(0, 255)
+
+        cv2.drawContours(img, [cnt], -1, (r, g, b), 3)
+        for pt in cnt:
+            x, y = pt[0]
+            output[i].append((x, y, 0))
+
+        i += 1
+
+        
+    
 
 
+    # Save the result
+    #output_filename = os.path.splitext(filename)[0] + "_vertices.png"
+    #cv2.imwrite(output_filename, img)
+
+    return filename, output
+
+
+def vertex_to_path(filename, centre=(180, 90), startPoint=(130, 60, 0), maxWidth=100, maxHeight=50):
+    file, contours = png_vertex_detection(filename)
+    
+    # Convert contours to path
+    points = []
+    ik = []
+
+    # Store the contours in order of visitation
+    contour_order = []
+    
+    # Step 1: Find the first contour closest to the start point (0, 0)
+    min_dist = float('inf')
+    first_contour = None
+    first_point = None
+    
+    for i, contour in contours.items():
+        for pt in contour:
+            x, y, z = pt
+            dist = np.linalg.norm(np.array([x, y, z]) - np.array(startPoint))
+            if dist < min_dist:
+                min_dist = dist
+                first_contour = i
+                first_point = pt
+    
+    # Add the first contour to the order and set the current position to the first point
+    contour_order.append(first_contour)
+    current_position = first_point
+
+    # Step 2: Find the closest contour to the current contour, then repeat
+    remaining_contours = set(contours.keys()) - {first_contour}  # Remove the first contour from remaining contours
+
+    while remaining_contours:
+        min_dist = float('inf')
+        closest_contour = None
+        closest_point = None
+        
+        for contour_id in remaining_contours:
+            contour = contours[contour_id]
+            for pt in contour:
+                x, y, z = pt
+                dist = np.linalg.norm(np.array([x, y]) - np.array(current_position[:2]))  # Only compare x, y distance
+                if dist < min_dist:
+                    min_dist = dist
+                    closest_contour = contour_id
+                    closest_point = pt
+        
+        # Add the closest contour to the order
+        contour_order.append(closest_contour)
+        
+        # Update current position to the closest point in the newly selected contour
+        current_position = closest_point
+        
+        # Remove the selected contour from remaining contours
+        remaining_contours.remove(closest_contour)
+
+    # Now contour_order contains the contours in the correct order
+    #print("Contour order: ", contour_order)
+    
+    # Step 3: Process the points in the contours in the order
+    for contour_id in contour_order:
+        contour = contours[contour_id]
+
+        # Find the closest point within the current contour to the current position
+        min_dist = float('inf')
+        closest_point = None
+        for pt in contour:
+            x, y, z = pt
+            dist = np.linalg.norm(np.array([x, y]) - np.array(current_position[:2]))
+            if dist < min_dist:
+                min_dist = dist
+                closest_point = pt
+        
+        # Reorder the points in this contour, starting from the closest point
+        contour_points = []
+        closest_index = contour.index(closest_point)
+        contour_points.extend(contour[closest_index:])  # Start from the closest point
+        contour_points.extend(contour[:closest_index])  # Then take the previous points
+        
+        # Step 4: Backtrack to the closest point
+        for pt in contour_points:
+            points.append(pt)
+            x, y, z = pt
+
+            # Calculate inverse kinematics for each point (assumed to be defined elsewhere)
+            A, B, C = inverse_kinematics(x, y, z)
+            ik.append((A, B, C))
+        
+        # After finishing this contour, backtrack to the closest point in the contour
+        points.append(closest_point)
+        x, y, z = closest_point
+        A, B, C = inverse_kinematics(x, y, z)
+        ik.append((A, B, C))
+
+        # Update current position to the closest point for the next contour
+        current_position = closest_point
+
+    # Scale points to fit within the workspace, centered around the given centre
+    points = np.array(points)
+
+    # Scale x and y to fit within the bounds of startPoint[0] + maxWidth and startPoint[1] + maxHeight
+    x_min, x_max = np.min(points[:, 0]), np.max(points[:, 0])
+    y_min, y_max = np.min(points[:, 1]), np.max(points[:, 1])
+    
+    points[:, 0] = (points[:, 0] - x_min) / (x_max - x_min) * maxWidth + startPoint[0]
+    points[:, 1] = (points[:, 1] - y_min) / (y_max - y_min) * maxHeight + startPoint[1]
+
+    # Scale z: Assuming you want to scale it to fit within 0 and maxHeight
+    z_min, z_max = np.min(points[:, 2]), np.max(points[:, 2])
+    points[:, 2] = (points[:, 2] - z_min) / (z_max - z_min) * maxHeight
+
+    # Clip to ensure points stay within bounds
+    points[:, 0] = np.clip(points[:, 0], startPoint[0], startPoint[0] + maxWidth)
+    points[:, 1] = np.clip(points[:, 1], startPoint[1], startPoint[1] + maxHeight)
+    points[:, 2] = np.clip(points[:, 2], 0, maxHeight)
+
+    # Add start point to the start of the points and box around the image
+    points = np.insert(points, 0, startPoint, axis=0)
+    points = np.insert(points, 0, (startPoint[0]+maxWidth, startPoint[1], 0), axis=0)
+    points = np.insert(points, 0, (startPoint[0]+maxWidth, startPoint[1]+maxHeight, 0), axis=0)
+    points = np.insert(points, 0, (startPoint[0], startPoint[1]+maxHeight, 0), axis=0)
+    points = np.insert(points, 0, startPoint, axis=0)
+
+
+    # Add the end point to the end of the points
+    #points = np.append(points, [[230, 120, 0]], axis=0)
+    #points = np.append(points, [[130, 120, 0]], axis=0)
+    #points = np.append(points, [[130, 60, 0]], axis=0)
+
+
+
+    return file, points, ik, contour_order
+
+
+def save_path(filenameInput):
+    file, points, ik, countourorder = vertex_to_path(filenameInput)
+
+    # Save the points to a CSV file in /points with the same name as the input file but with .csv extension
+    if not os.path.exists('points'):
+        os.makedirs('points')
+
+    output_filename = os.path.splitext(os.path.basename(filenameInput))[0] + "_points.csv"
+
+    #save ik positions to a csv file
+    with open(os.path.join('points', output_filename), 'w') as f:
+        for point in points:
+            f.write(f"{point[0]},{point[1]},{point[2]}\n")
+
+
+
+
+    #plot graph of points and save in /graphs
+    if not os.path.exists('graphs'):
+        os.makedirs('graphs')
+
+    plt.figure()
+    plt.plot([point[0] for point in points], [point[1] for point in points])
+    plt.xlabel('X')
+    plt.ylabel('Y')
+    plt.title('Path')
+
+    #flip y axis
+    plt.gca().invert_yaxis()
+
+    plt.savefig(os.path.join('graphs', os.path.splitext(os.path.basename(filenameInput))[0] + "_path.png"))
+
+
+    plt.close()
+
+
+
+
+#get all files in /pic directory
+files = os.listdir('pics')
+
+
+for file in files:
+        print(f"Processing pics/{file}")
+        file = os.path.join('pics', file)
+
+        save_path(file)
