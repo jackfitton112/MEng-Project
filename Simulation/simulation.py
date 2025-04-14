@@ -1,7 +1,7 @@
 from getElbow import getElbowLocations, generate_perturbed_points_around_axis, find_third_point_triangle
 from kinematics import inverse_kinematics, forward_kinematics
 from plotScene import plot_scene
-from tripteron import Tripteron, TripteronDynamics, TripteronHysteresisSimulator
+from tripteron import Tripteron, TripteronDynamics
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -17,7 +17,8 @@ def inverse_kinematics(x, y, z):
     A = x - y / np.tan(np.radians(60))
     C = x + y / np.tan(np.radians(60))
     #B = x - z / np.tan(np.radians(50))
-    B = C - 50
+    B =  (C-A) / 2 + A
+
 
     # Ensure carriages remain within rail limits
     if not (A_MIN <= A <= A_MAX and B_MIN <= B <= B_MAX and C_MIN <= C <= C_MAX) or x < 0:
@@ -41,6 +42,22 @@ def forward_kinematics(A, B, C):
     z = 0  # or compute z based on B
     return float(x), float(y), float(z)
 
+coordinates = [
+    [130, 60, 0],
+    [230, 60, 0],
+    [230, 110, 0],
+    [210, 110, 0],
+    [210, 70, 0],
+    [190, 70, 0],
+    [190, 110, 0],
+    [170, 110, 0],
+    [170, 70, 0],
+    [150, 70, 0],
+    [150, 110, 0],
+    [130, 110, 0],
+    [130, 60, 0]
+]
+
 ARM_LENGTH_SMALL = 90  # mm
 ARM_LENGTH = 180  # mm total
 RAIL_LENGTH = 390  # mm
@@ -58,57 +75,47 @@ B_MAX = A_MAX - PLATFORM_WIDTH - MIN_SPACING
 C_MIN = B_MIN + PLATFORM_WIDTH + MIN_SPACING
 C_MAX = RAIL_LENGTH - (HALF_PLATFORM_WIDTH + MIN_SPACING)
 
+startpos = [130,60,0]
+endpos = [230, 120, 0]
+tripteron = Tripteron(*startpos)
 
-#set up a tripteron controller
-tripteron = Tripteron(100, 130, 160) # represents an XYZ of 150.0, 51.961524227066306, 0.0
+hys, og = tripteron.apply_hysteresis(coordinates)
+dyn = tripteron.apply_dynamics(hys)
+meanpos, minpos, maxpos, ideal = tripteron.apply_stochastic_path(startpos, endpos)
 
+og = np.array(og)
+hys = np.array(hys)
+dyn = np.array(dyn)
 
-initialPos = [100, 110, 160]
-endPos = [100, 130, 160]
-#angles = [5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90]
-angles = [45, 60]
-
-link_mass = 0.1 # kg
-end_effector_share = 0.1  # each limb carries 1/3 of 0.3kg
-link_length = 0.09  # meters
-
-# Inertia approximation for slender rod (about CoM): I = (1/12) * m * L^2
-I_link = (1/12) * link_mass * link_length**2 * np.eye(3)
-I_effector = (1/12) * end_effector_share * (0.1**2) * np.eye(3)  # assume 10cm wide load
-
-link_params = {
-    'A': {
-        'masses': [link_mass, link_mass, end_effector_share],
-        'lengths': [link_length, link_length, 0],  # no length for platform mass
-        'inertias': [I_link, I_link, I_effector],
-    },
-    'B': {
-        'masses': [link_mass, link_mass, end_effector_share],
-        'lengths': [link_length, link_length, 0],
-        'inertias': [I_link, I_link, I_effector],
-    },
-    'C': {
-        'masses': [link_mass, link_mass, end_effector_share],
-        'lengths': [link_length, link_length, 0],
-        'inertias': [I_link, I_link, I_effector],
-    }
-}
-
-#dynamics = TripteronDynamics(tripteron, link_params)
-
-#dyn = TripteronDynamics(tripteron, link_params)
-
-#start = (320, 65, 0)
-#end = (65, 65, 0)
-#dyn.simulate_motion(start, end, duration=0.2, dt=0.01)
-
-#tripteron.plotXYReach(angles, plot=True)
-
-trip = Tripteron(0.1, 0.15, 0.2)
-sim = TripteronHysteresisSimulator(trip, backlash=0.02e-3)
-
-path = [[65, 60, 0], [100, 60, 0], [120, 60, 0], [200, 60, 0],[300, 60, 0],[300, 100, 0],[65, 60, 0]] 
-
-sim.simulate_path(path)
+ideal = np.array(ideal)
+mean = np.array(meanpos)
+min = np.array(minpos)
+max = np.array(maxpos)
 
 
+
+#plot og path and hys path
+fig = plt.figure(figsize=(10, 10))
+ax = fig.add_subplot(111, projection='3d')
+
+#plot ideal path, mean path and min and max as error bars / distribution
+ax.plot(mean[:, 0], mean[:, 1], mean[:, 2], label='Mean Path', color='blue', linestyle="dashdot")
+ax.plot(min[:, 0], min[:, 1], min[:, 2], label='Min Path', color='green', linestyle="dotted")
+ax.plot(max[:, 0], max[:, 1], max[:, 2], label='Max Path', color='red', linestyle="dotted")
+ax.plot(ideal[:, 0], ideal[:, 1], ideal[:, 2], label='Ideal Path', color='orange')
+#plot original path and hys path
+
+#add labels
+ax.set_xlabel("X (mm)")
+ax.set_ylabel("Y (mm)")
+
+ax.set_title("Stochastic Analysis (10,000 iter) from (130, 60, 0) to (230, 120, 0) - Zoomed")
+
+
+ax.legend()
+
+ax.view_init(elev=90, azim=90, roll=0)
+
+fig.savefig('hys_path.png', dpi=300)
+
+plt.show()

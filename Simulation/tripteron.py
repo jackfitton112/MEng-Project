@@ -26,64 +26,41 @@ C_MAX = RAIL_LENGTH - (HALF_PLATFORM_WIDTH + MIN_SPACING)
 
 ARM_LENGTH = 150  # Example arm length
 
+MAX_VEL = 100  # mm/s
+MAX_ACC = 2  # mm/s^2
+
 class Tripteron:
     def __init__(self, A, B, C):
-        self.A, self.B, self.C = sorted([A, B, C])
+        self.A, self.B, self.C = A, B, C
+        self.X, self.Y, self.Z = None, None, None
+
+
         
-        # Store previous positions
-        self.prev_A = self.A
-        self.prev_B = self.B
-        self.prev_C = self.C
-        
-        # Store previous time for velocity/acceleration estimation
-        self.prev_time = time.time()  # ✅ moved here after A/B/C init
-
-        # Initialize velocities and accelerations
-        self.vel_A = self.vel_B = self.vel_C = 0.0
-        self.acc_A = self.acc_B = self.acc_C = 0.0
-
-        # PID and controller state
-        self.integral = np.zeros(3)
-        self.prev_error = np.zeros(3)
-
         # Geometry setup
         self.Bangle = 50
         self.ACangle = 60
         self.elbowA = self.elbowB = self.elbowC = None
+        #self.update_kinematics()
+        self.time = 0
 
-        self.update_kinematics()
+        self.hysteresis_value = 20
 
-    def update_dynamics(self, dt):
-        # Compute velocities
-        new_vel_A = (self.A - self.prev_A) / dt
-        new_vel_B = (self.B - self.prev_B) / dt
-        new_vel_C = (self.C - self.prev_C) / dt
+        #velocity and acceleration vars
+        self._PrevXYZ = None, None, None
+        self._PrevABC = None, None, None
+        self._PrevTime = 0 #simulation so time is relative
 
-        # Clamp to physical motor limits (optional)
-        MAX_VEL = 0.02  # 20 mm/s = 0.02 m/s
-        new_vel_A = np.clip(new_vel_A, -MAX_VEL, MAX_VEL)
-        new_vel_B = np.clip(new_vel_B, -MAX_VEL, MAX_VEL)
-        new_vel_C = np.clip(new_vel_C, -MAX_VEL, MAX_VEL)
-
-        # Compute accelerations
-        self.acc_A = (new_vel_A - self.vel_A) / dt
-        self.acc_B = (new_vel_B - self.vel_B) / dt
-        self.acc_C = (new_vel_C - self.vel_C) / dt
-
-        # Update velocities
-        self.vel_A, self.vel_B, self.vel_C = new_vel_A, new_vel_B, new_vel_C
-
-        # Update previous positions
-        self.prev_A, self.prev_B, self.prev_C = self.A, self.B, self.C
+        self._Xvel = self._Yvel = self._Zvel = 0
+        self._Xacc = self._Yacc = self._Zacc = 0
 
 
-    def update_kinematics(self):
-        self.X, self.Y, self.Z = self.forward_kinematics()
-        self.end = np.array([self.X, self.Y, self.Z])
-        try:
-            self.updateElbowLocations()
-        except:
-            print("error updating elbows")
+        #dynamics setup
+        self.end_mass = 0.5 # kg
+
+        self.forward_kinematics()
+
+        
+
 
     def forward_kinematics(self):
         x = (self.A + self.C) / 2
@@ -97,10 +74,13 @@ class Tripteron:
         if y > math.sqrt(ARM_LENGTH**2 - ARM_LENGTH_SMALL**2):
             #Y max vilated, return none
             return None, None, None
+        
+        self.X = x
+        self.Y = y
+        self.Z = 0 # z
 
-        return x, y, z
-
-    def inverse_kinematics(self, x, y, z):
+    def inverse_kinematics(self):
+        x, y, z = self.X, self.Y, self.Z
         A = x - y / np.tan(np.radians(self.ACangle))
         C = x + y / np.tan(np.radians(self.ACangle))
         B = x - z / np.tan(np.radians(self.Bangle))
@@ -111,10 +91,27 @@ class Tripteron:
         if abs(C - A) > ARM_LENGTH:
             print("Carriage positions exceed arm length - A: {}, C: {}".format(A, C))
             return None
-        return A, B, C
+        
+        self.A, self.B, self.C = A, B, C
     
     def updateElbowLocations(self):
         self.elbowA, self.elbowB, self.elbowC = getElbowLocations(self.A, self.B, self.C, self.end, tolerance=1, B_angle=self.Bangle)
+
+    def set_ABC(self, A, B, C):
+
+        self._PrevABC = self.A, self.B, self.C
+        self._PrevXYZ = self.X, self.Y, self.Z
+
+        self.A, self.B, self.C = A, B, C
+        self.forward_kinematics()
+
+    def set_XYZ(self, X, Y, Z):
+
+        self._PrevABC = self.A, self.B, self.C
+        self._PrevXYZ = self.X, self.Y, self.Z
+
+        self.X, self.Y, self.Z = X, Y, Z
+        self.inverse_kinematics()
 
     def get_XYZ(self):
         return self.X, self.Y, self.Z
@@ -123,145 +120,293 @@ class Tripteron:
         return self.A, self.B, self.C
 
     def get_elbows(self):
+        self.updateElbowLocations()
         return self.elbowA, self.elbowB, self.elbowC
 
-    def plot(self):
-        self.update_kinematics()
+    def apply_hysteresis(self, target_path):
+        X_BACKLASH = 5
+        Y_BACKLASH = 0.4
+        direction = None  # F,B,L,R
+        prevDirection = None
 
-        fig = plt.figure(figsize=(15, 10))
-        FONT_SIZE = 20
+        original_path = target_path.copy()
+        prevPoint = np.array([self.X, self.Y, self.Z])  # Start position
+        new_path = []
+
+        # Ensure the start point is the same for both paths
+        new_path.append(original_path[0])
+
+        for index, path in enumerate(original_path):
+            # Convert current path point to numpy array
+            path = np.array(path)
+
+            X, Y, Z = path
+            Y = Y *0.95
+            Z = 0
+
+            if index == 0:
+                new_path.append(path)
+                continue
+
+            X_DIST = path[0] - original_path[index-1][0]
+            Y_DIST = path[1] - original_path[index-1][1]
+
+            print(f"X_DIST: {X_DIST}, Y_DIST: {Y_DIST}")
+
+            if X_DIST != 0:
+                if X_DIST > 0:
+                    X -= X_BACKLASH
+                    print("X - Backlash")
+                else:
+                    X += X_BACKLASH
+                    print("X + Backlash")
+
+            if Y_DIST != 0:
+                if Y_DIST > 0:
+                    Y += Y_BACKLASH
+                else:
+                    Y -= Y_BACKLASH
+
+
+
+            # Add modified path with backlash compensation
+            new_path.append([X, Y, Z])
+
+            # Update previous point and direction for next iteration
+            prevPoint = [X, Y, Z]
+            prevDirection = direction
+
+        return new_path, target_path
+
+    def apply_dynamics(self, target_path):
+
+        #for the dynamics and estimated angle error. we will randomly apply error to the end effectors position
+        # we will do this by simulating inaccuracies in the platforms A,B and C positions and thrn getting the new FK values for them
+        output = []
+
+
+        for index in range(len(target_path)-1):
+
+            # get the distance between the two points
+            print(f"Index: {index} - {target_path[index]} to {target_path[index+1]}")
+            dist = np.subtract(target_path[index+1], target_path[index])  # Corrected order here
+
+            # Calculate the distance (Euclidean)
+            dist_magnitude = np.linalg.norm(dist)  # This gives the total distance between points
+            
+            # Number of points in the line segment
+            num_points = int(np.ceil(dist_magnitude))  # Rounding up to ensure the step is at least 1 unit
+
+            mm_path = np.linspace(target_path[index], target_path[index+1], num_points)
+
+
+            for point in mm_path:
+
+                A, B, C  = self.get_ABC()
+                self.set_XYZ(*point)
+                A, _, C = self.get_ABC()
+
+                random_A = np.random.uniform(-0.2, 0.2)
+                random_B = np.random.uniform(-0.2, 0.2)
+                random_C = np.random.uniform(-0.2, 0.2)
+
+                A += random_A
+                C += random_C
+
+                self.set_ABC(A, B, C)
+
+                self.forward_kinematics()
+
+                output.append((self.X, self.Y, self.Z))
+
+
+        output_path = []
+        #moving window average all of the points
+        for index, path in enumerate(output):
+            
+            if index == 0:
+                continue
+
+            if index == len(output)-1:
+                continue
+
+            X = (output[index-1][0] + path[0] + output[index+1][0])
+            Y = (output[index-1][1] + path[1] + output[index+1][1])
+            Z = 0
+
+            output_path.append((X,Y,Z))
+
+
+
+        return output
+
+    def apply_stochastic_path(self, start_point, end_point, num_points=100, min_variation=-1.5, max_variation=1.5):
+        """
+        Simulate noise in the path, provide a mean, max and min of X, Y positions that have been seen in this path.
+
+        Parameters:
+            start_point (tuple): The start point [X1, Y1, Z1]
+            end_point (tuple): The end point [X2, Y2, Z2]
+            num_points (int): The number of points between start and end to simulate
+            min_variation (float): Minimum variation to apply to each point
+            max_variation (float): Maximum variation to apply to each point
+        """
+
+        # Generate a linear path from start_point to end_point
+        path = np.linspace(start_point, end_point, num_points)
+
+        # Apply random variation to each point in the path
+        overall_Path = []
+
+        for i in range(num_points):
+            noisy_path = []
+            for point in path:
+                # Apply random noise within the defined range
+                X_noise = point[0] + np.random.uniform(min_variation, max_variation)
+                Y_noise = point[1] + np.random.uniform(min_variation, max_variation)
+                Z_noise = 0  # Assuming Z remains 0 in this case
+                
+                noisy_path.append((X_noise, Y_noise, Z_noise))
+            
+            overall_Path.append(noisy_path)
+
+        # Calculate min, max, and mean for each point in the noisy path
+        minPath = []
+        maxPath = []
+        meanPath = []
+
+        for i in range(len(overall_Path[0])):  # For each point in the noisy path
+
+            X_vals = []
+            Y_vals = []
+
+            for j in range(len(overall_Path)):  # For each noisy path (generated)
+                X_vals.append(overall_Path[j][i][0])
+                Y_vals.append(overall_Path[j][i][1])
+
+            # Get the min, max, and mean of X, Y for this point
+            minX, maxX = min(X_vals), max(X_vals)
+            minY, maxY = min(Y_vals), max(Y_vals)
+
+            meanX = np.mean(X_vals)
+            meanY = np.mean(Y_vals)
+
+            minPath.append((minX, minY, 0))  # Store min values
+            maxPath.append((maxX, maxY, 0))  # Store max values
+            meanPath.append((meanX, meanY, 0))  # Store mean values
+
+        # Print results for inspection
+        for i in range(len(minPath)):
+            print(f"Point {i+1} - Min: {minPath[i]}, Max: {maxPath[i]}, Mean: {meanPath[i]}")
+
+
+        return meanPath, minPath, maxPath, path
+
         
-        # === 3D View ===
-        ax3d = fig.add_subplot(221, projection='3d')
-        ax3d.set_title("3D View")
-        ax3d.set_xlabel("X")
-        ax3d.set_ylabel("Y")
-        ax3d.set_zlabel("Z")
-
-        def plot_limb_3d(ax, base_x, elbow, color, label_base, label_elbow):
-            ax.scatter(base_x, 0, 0, c=color)
-            ax.text(base_x, 0, 0, label_base, size=FONT_SIZE)
-            ax.scatter(*elbow, c=color)
-            ax.text(*elbow, label_elbow, size=FONT_SIZE)
-            ax.plot([base_x, elbow[0]], [0, elbow[1]], [0, elbow[2]], c=color)
-            ax.plot([elbow[0], self.X], [elbow[1], self.Y], [elbow[2], self.Z], c=color)
-            #plot a dashed line from end effector x to x=0
-            ax.plot([self.X, self.X], [self.Y, 0], [self.Z, self.Z], ls="--")
-
-        ax3d.scatter(self.X, self.Y, self.Z, c="r")
-        ax3d.text(self.X, self.Y, self.Z, "G", size=FONT_SIZE)
-
-        plot_limb_3d(ax3d, self.A, self.elbowA, "b", "A", "D")
-        plot_limb_3d(ax3d, self.B, self.elbowB, "g", "B", "E")
-        plot_limb_3d(ax3d, self.C, self.elbowC, "y", "C", "F")
-        
-
-        # === 2D Top View (XY) ===
-        ax_top = fig.add_subplot(222)
-        ax_top.set_title("Top View (XY)")
-        ax_top.set_xlabel("X")
-        ax_top.set_ylabel("Y")
-        ax_top.grid(True)
-        ax_top.set_aspect('equal')
-
-        def plot_top(ax, base_x, elbow, color, label_base, label_elbow):
-            ax.scatter(base_x, 0, c=color)
-            ax.text(base_x, 0, label_base, size=FONT_SIZE)
-            ax.scatter(elbow[0], elbow[1], c=color)
-            ax.text(elbow[0], elbow[1], label_elbow, size=FONT_SIZE)
-            ax.plot([base_x, elbow[0]], [0, elbow[1]], c=color)
-            ax.plot([elbow[0], self.X], [elbow[1], self.Y], c=color)
-            ax.plot([self.X, self.X], [self.Y, 0], ls="--")
-
-        ax_top.scatter(self.X, self.Y, c="r")
-        ax_top.text(self.X, self.Y, "G", size=FONT_SIZE)
-        plot_top(ax_top, self.A, self.elbowA, "b", "A", "D")
-        plot_top(ax_top, self.B, self.elbowB, "g", "B", "E")
-        plot_top(ax_top, self.C, self.elbowC, "y", "C", "F")
-
-        # === 2D Front View (XZ) ===
-        ax_front = fig.add_subplot(223)
-        ax_front.set_title("Front View (XZ)")
-        ax_front.set_xlabel("X")
-        ax_front.set_ylabel("Z")
-        ax_front.grid(True)
-        ax_front.set_aspect('equal')
-
-        def plot_front(ax, base_x, elbow, color, label_base, label_elbow):
-            ax.scatter(base_x, 0, c=color)
-            ax.text(base_x, 0, label_base, size=FONT_SIZE)
-            ax.scatter(elbow[0], elbow[2], c=color)
-            ax.text(elbow[0], elbow[2], label_elbow, size=FONT_SIZE)
-            ax.plot([base_x, elbow[0]], [0, elbow[2]], c=color)
-            ax.plot([elbow[0], self.X], [elbow[2], self.Z], c=color)
-            #ax.plot([self.X, self.X], [self.Y, 0], [self.Z, self.Z], ls="--")
-
-        ax_front.scatter(self.X, self.Z, c="r")
-        #ax_front.text(self.X, self.Z, "G", size=FONT_SIZE)
-        plot_front(ax_front, self.A, self.elbowA, "b", "A", "D")
-        plot_front(ax_front, self.B, self.elbowB, "g", "B", "E")
-        plot_front(ax_front, self.C, self.elbowC, "y", "C", "F")
-
-        # === 2D Left View (YZ) ===
-        ax_left = fig.add_subplot(224)
-        ax_left.set_title("Left View (YZ)")
-        ax_left.set_xlabel("Y")
-        ax_left.set_ylabel("Z")
-        ax_left.grid(True)
-        ax_left.set_aspect('equal')
-
-        def plot_left(ax, elbow, color, label_elbow):
-            ax.scatter(elbow[1], elbow[2], c=color)
-            ax.text(elbow[1], elbow[2], label_elbow, size=FONT_SIZE)
-            ax.plot([0, elbow[1]], [0, elbow[2]], c=color)
-            ax.plot([elbow[1], self.Y], [elbow[2], self.Z], c=color)
-
-        ax_left.scatter(self.Y, self.Z, c="r")
-        ax_left.text(self.Y, self.Z, "G", size=FONT_SIZE)
-        plot_left(ax_left, self.elbowA, "b", "D")
-        plot_left(ax_left, self.elbowB, "g", "E")
-        plot_left(ax_left, self.elbowC, "y", "F")
 
 
-        # === Show All ===
-        plt.tight_layout()
-        plt.show()
+    
 
 
-    def plot3D(self):
-        self.update_kinematics()
+    def calculate_velocity(self, targetXYZ=None, targetABC=None, duration=1, dt=0.1):
+        startXYZ = self.X, self.Y, self.Z
+        startABC = self.A, self.B, self.C
 
-        fig = plt.figure(figsize=(15, 15))
+        if targetXYZ:
+            points = np.linspace(np.array(startXYZ), np.array(targetXYZ), int(duration/dt))
+            kinematic_type = "XYZ"
+        elif targetABC:
+            points = np.linspace(np.array(startABC), np.array(targetABC), int(duration/dt))
+            kinematic_type = "ABC"
+        else:
+            print("No target XYZ or ABC provided")
+            return
 
-        FONT_SIZE = 24
-        
-        # === 3D View ===
-        ax3d = fig.add_subplot(111, projection='3d')
-        #ax3d.set_title("3D View")
-        ax3d.set_xlabel("X (mm)")
-        ax3d.set_ylabel("Y (mm)")
-        ax3d.set_zlabel("Z (mm)")
+        velocities = []
+        accelerations = []
 
-        def plot_limb_3d(ax, base_x, elbow, color, label_base, label_elbow):
-            ax.scatter(base_x, 0, 0, c=color)
-            ax.text(base_x, 0, 0, label_base, fontsize=FONT_SIZE)
-            ax.scatter(*elbow, c=color)
-            ax.text(*elbow, label_elbow, fontsize=FONT_SIZE)
-            ax.plot([base_x, elbow[0]], [0, elbow[1]], [0, elbow[2]], c=color)
-            ax.plot([elbow[0], self.X], [elbow[1], self.Y], [elbow[2], self.Z], c=color)
+        prev_Xvel = prev_Yvel = prev_Zvel = 0.0
 
-        ax3d.scatter(self.X, self.Y, self.Z, c="r")
-        ax3d.text(self.X, self.Y, self.Z, "G", fontsize=FONT_SIZE)
+        for index, point in enumerate(points):
+            if kinematic_type == "XYZ":
+                self.set_XYZ(*point)
+            elif kinematic_type == "ABC":
+                self.set_ABC(*point)
 
-        plot_limb_3d(ax3d, self.A, self.elbowA, "b", "A", "D")
-        plot_limb_3d(ax3d, self.B, self.elbowB, "g", "B", "E")
-        plot_limb_3d(ax3d, self.C, self.elbowC, "y", "C", "F")
+            # Velocity
+            Xvel = (self.X - self._PrevXYZ[0]) / dt
+            Yvel = (self.Y - self._PrevXYZ[1]) / dt
+            Zvel = (self.Z - self._PrevXYZ[2]) / dt
+
+            # Acceleration
+            Xacc = (Xvel - prev_Xvel) / dt
+            Yacc = (Yvel - prev_Yvel) / dt
+            Zacc = (Zvel - prev_Zvel) / dt
+
+            self._Xacc = Xacc
+            self._Yacc = Yacc
+            self._Zacc = Zacc
+
+            # Store results
+            velocities.append((Xvel, Yvel, Zvel))
+            accelerations.append((Xacc, Yacc, Zacc))
+
+            # Update previous values
+            self._PrevXYZ = (self.X, self.Y, self.Z)
+            self._PrevABC = (self.A, self.B, self.C)
+
+            prev_Xvel, prev_Yvel, prev_Zvel = Xvel, Yvel, Zvel
 
 
-        fig.savefig("3d_simple.jpg")
-        fig.tight_layout()
 
-        plt.show()
+        return velocities, accelerations, points
+
+    def print_jacobian(self):
+        """
+        Compute and print the Jacobian matrix for the manipulator.
+        The Jacobian relates joint velocities to end-effector velocities.
+        """
+        # Define the angles alpha, beta, and gamma based on the class attributes
+        alpha = np.radians(self.ACangle)  # Convert to radians
+        beta = np.radians(self.ACangle)   # Assuming same angle for both prismatic joints
+        gamma = np.radians(self.Bangle)   # Angle for Z direction
+
+        # Compute the elements of the Jacobian matrix
+        J11 = -np.tan(alpha) * np.tan(beta) / (np.tan(alpha) + np.tan(beta))
+        J13 = np.tan(alpha) * np.tan(beta) / (np.tan(alpha) + np.tan(beta))
+
+        J21 = np.tan(alpha) / (np.tan(alpha) + np.tan(beta))
+        J23 = np.tan(beta) / (np.tan(alpha) + np.tan(beta))
+
+        J31 = np.tan(alpha) / (np.tan(gamma) * (np.tan(alpha) + np.tan(beta)))
+        J32 = 1 / np.tan(gamma)
+        J33 = np.tan(beta) / (np.tan(gamma) * (np.tan(alpha) + np.tan(beta)))
+
+        # Construct the Jacobian matrix
+        J = np.array([
+            [J11, 0, J13],
+            [J21, 0, J23],
+            [J31, J32, J33]
+        ])
+
+
+
+        return J
+
+    def compute_end_effector_velocity(self, joint_velocities):
+        """
+        Compute the end-effector velocity given joint velocities using the Jacobian matrix.
+        """
+        # Get the Jacobian matrix
+        J = self.print_jacobian()
+
+        # Convert joint velocities to a vector
+        joint_velocity_vector = np.array(joint_velocities)  # [dot_A, dot_B, dot_C]
+
+        # Compute the end-effector velocity: v = J * q
+        end_effector_velocity = np.dot(J, joint_velocity_vector)
+
+        return end_effector_velocity 
 
     def plot2PointsChangeinAngle(self, InitialPos, EndPos, Bangles, plot=True):
 
@@ -367,7 +512,7 @@ class Tripteron:
                     self.C = posC
                     self.B = posC - (PLATFORM_WIDTH + MIN_SPACING)
 
-                    self.X, self.Y, self.Z = self.forward_kinematics()
+                    self.forward_kinematics()
 
                     if self.X and self.Y:
                         output.append((self.X, self.Y, 0))
@@ -417,105 +562,9 @@ class Tripteron:
 
 
 class TripteronDynamics:
-    def __init__(self, tripteron, link_params):
-        """
-        tripteron: an instance of the Tripteron class
-        link_params: a dictionary containing link properties (mass, inertia, length, etc.)
-        """
+    def __init__(self, tripteron):
         self.tripteron = tripteron
-        self.params = link_params  # Should include limb-specific data for A, B, and C
+        self.StartXYZ = None, None, None
+        self.EndXYZ = None, None, None
 
-    def compute_inverse_dynamics(self):
-        """
-        Compute the required actuator forces (inverse dynamics) for each limb.
-        Returns:
-            (F_A, F_B, F_C): tuple of required actuator forces at the prismatic joints
-        """
-        # Extract current state
-        A, B, C = self.tripteron.get_ABC()
-        elbows = self.tripteron.get_elbows()
-        end_effector = self.tripteron.get_XYZ()
-        
-        # TODO: You will need velocities and accelerations too
-        # Example: vel_A, acc_A = self.tripteron.vel_A, self.tripteron.acc_A
-        
-        # Compute inverse dynamics per limb
-        F_A = self.inverse_dynamics_limb(A, 'A')
-        F_B = self.inverse_dynamics_limb(B, 'B')
-        F_C = self.inverse_dynamics_limb(C, 'C')
 
-        return F_A, F_B, F_C
-
-    def inverse_dynamics_limb(self, q, limb_id):
-        link = self.params[limb_id]
-
-        # Get total mass of limb
-        m_total = sum(link['masses'])
-
-        # Get acceleration along this prismatic axis
-        acc_map = {
-            'A': self.tripteron.acc_A,
-            'B': self.tripteron.acc_B,
-            'C': self.tripteron.acc_C
-        }
-        a = acc_map[limb_id]
-
-        # Assume prismatic joint moves vertically (gravity included)
-        g = 9.81  # m/s²
-        F = m_total * a + m_total * g
-
-        return F
-    
-    def simulate_motion(self, start_xyz, end_xyz, duration, dt=0.01):
-        """
-        Simulates motion from start to end over a given duration and plots actuator forces.
-        start_xyz, end_xyz: 3D tuples or arrays (X, Y, Z)
-        duration: total motion time in seconds
-        dt: simulation step in seconds
-        """
-        start_xyz = np.array(start_xyz)
-        end_xyz = np.array(end_xyz)
-        
-        steps = int(duration / dt)
-        times = np.linspace(0, duration, steps)
-        
-        forces_A, forces_B, forces_C = [], [], []
-
-        for t in times:
-            alpha = t / duration
-            xyz = (1 - alpha) * start_xyz + alpha * end_xyz
-
-            ik_result = self.tripteron.inverse_kinematics(*xyz)
-            if ik_result is None:
-                print(f"Invalid IK at time {t:.3f}s for position {xyz}")
-                forces_A.append(np.nan)
-                forces_B.append(np.nan)
-                forces_C.append(np.nan)
-                continue
-
-            self.tripteron.A, self.tripteron.B, self.tripteron.C = ik_result
-            self.tripteron.update_kinematics()
-            self.tripteron.update_dynamics(dt)
-
-            F_A, F_B, F_C = self.compute_inverse_dynamics()
-            forces_A.append(F_A)
-            forces_B.append(F_B)
-            forces_C.append(F_C)
-
-            #print forces
-            print(f"Time: {t:.3f}s, Forces: A={F_A:.2f}, B={F_B:.2f}, C={F_C:.2f}")
-
-        # Plotting
-        plt.figure(figsize=(10, 5))
-        plt.plot(times, forces_A, label='Force A', color='red')
-        plt.plot(times, forces_B, label='Force B', color='green')
-        plt.plot(times, forces_C, label='Force C', color='blue')
-        plt.xlabel('Time (s)')
-        plt.ylabel('Force (N)')
-        plt.title('Prismatic Joint Forces During Motion')
-        plt.grid(True)
-        plt.legend()
-        plt.tight_layout()
-        plt.show()
-
-    
