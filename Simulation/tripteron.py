@@ -59,9 +59,6 @@ class Tripteron:
 
         self.forward_kinematics()
 
-        
-
-
     def forward_kinematics(self):
         x = (self.A + self.C) / 2
         y = (self.C - self.A) / 2 * np.tan(np.radians(self.ACangle))
@@ -97,6 +94,17 @@ class Tripteron:
     def updateElbowLocations(self):
         self.elbowA, self.elbowB, self.elbowC = getElbowLocations(self.A, self.B, self.C, self.end, tolerance=1, B_angle=self.Bangle)
 
+    def updateVelAcc(self, dt=1):
+        # Calculate velocity and acceleration
+        self._Xvel = (self.X - self._PrevXYZ[0]) / dt
+        self._Yvel = (self.Y - self._PrevXYZ[1]) / dt
+        self._Zvel = (self.Z - self._PrevXYZ[2]) / dt
+
+        self._Xacc = (self._Xvel - self._PrevXYZ[0]) / dt
+        self._Yacc = (self._Yvel - self._PrevXYZ[1]) / dt
+        self._Zacc = (self._Zvel - self._PrevXYZ[2]) / dt
+
+
     def set_ABC(self, A, B, C):
 
         self._PrevABC = self.A, self.B, self.C
@@ -104,6 +112,7 @@ class Tripteron:
 
         self.A, self.B, self.C = A, B, C
         self.forward_kinematics()
+        self.updateVelAcc()
 
     def set_XYZ(self, X, Y, Z):
 
@@ -112,6 +121,7 @@ class Tripteron:
 
         self.X, self.Y, self.Z = X, Y, Z
         self.inverse_kinematics()
+        self.updateVelAcc()
 
     def get_XYZ(self):
         return self.X, self.Y, self.Z
@@ -141,7 +151,7 @@ class Tripteron:
             path = np.array(path)
 
             X, Y, Z = path
-            Y = Y *0.95
+            Y = Y * 0.95
             Z = 0
 
             if index == 0:
@@ -301,13 +311,7 @@ class Tripteron:
 
 
         return meanPath, minPath, maxPath, path
-
-        
-
-
-    
-
-
+  
     def calculate_velocity(self, targetXYZ=None, targetABC=None, duration=1, dt=0.1):
         startXYZ = self.X, self.Y, self.Z
         startABC = self.A, self.B, self.C
@@ -561,10 +565,184 @@ class Tripteron:
             plt.show()
 
 
-class TripteronDynamics:
+class TripteronControl:
+
     def __init__(self, tripteron):
         self.tripteron = tripteron
-        self.StartXYZ = None, None, None
-        self.EndXYZ = None, None, None
+        self.startTime = 0
+        self.endTime = 0
+        self.duration = 0
+        self.dt = 1
+
+        self.StartPos = (0, 0, 0)
+        self.EndPos = (0, 0, 0)
+
+        # PID gains
+        self.kp = 0.3
+        self.ki = 0.01
+        self.kd = 0.05
+        self.integral = np.array([0.0, 0.0, 0.0])
+        self.prev_error = np.array([0.0, 0.0, 0.0])
+
+    def setStartPos(self, startPos):
+        self.StartPos = startPos
+        self.tripteron.set_XYZ(*startPos)
+
+    def setEndPos(self, endPos):
+        self.EndPos = endPos
+
+    def LinearController(self, total_time=10.0, dt=0.5):
+        positions = []
+        velocities = []
+        times = []
+
+        max_speed = 20.0
+        max_acc = 4.0
+
+        pos = np.array(self.StartPos, dtype=float)
+        target = np.array(self.EndPos, dtype=float)
+        direction = (target - pos) / np.linalg.norm(target - pos)
+
+        delta = target - pos
+        print(f"Delta: {delta}")
+
+        speed = 0.0
+        time = 0.0
+
+        while time < total_time:
+            # Accelerate linearly
+            speed = min(speed + max_acc * dt, max_speed)
+            step = direction * speed * dt
+            pos += step
+
+            positions.append(pos.copy())
+            velocities.append(speed)
+            times.append(time)
+
+            if pos[0] >= target[0] and pos[1] >= target[1] and pos[2] >= target[2]:
+                print("Reached target position")
+                break
+
+            time += dt
+
+        return times, positions, velocities
 
 
+    def TrapizoidController(self, total_time=15.0, dt=0.5):
+        positions = []
+        velocities = []
+        times = []
+
+        accel = 4.0  # mm/s²
+        max_speed = 20.0  # mm/s
+
+        pos = np.array(self.StartPos, dtype=float)
+        target = np.array(self.EndPos, dtype=float)
+        total_dist = np.linalg.norm(target - self.StartPos)
+        direction = (target - pos) / total_dist
+        ramp_dist = 0.1 * total_dist
+
+        print(f"Ramp distance: {ramp_dist} mm")
+
+        time = 0.0
+
+        while time < total_time:
+            current_dist = np.linalg.norm(pos - self.StartPos)
+
+            if current_dist < ramp_dist:
+                speed = min(accel * time, max_speed)
+                print(f"Accelerating: {speed} mm/s")
+            elif current_dist > total_dist - ramp_dist:
+                speed = max_speed - (accel * (current_dist - (total_dist - ramp_dist)))
+                print(f"Decelerating: {speed} mm/s")
+            else:
+                speed = max_speed
+                print("at max speed")
+
+            step = direction * speed * dt
+
+            remaining = np.linalg.norm(target - pos)
+
+            if np.linalg.norm(step) > remaining:
+                step = direction * remaining
+                pos = target.copy()
+                print("Final adjustment to land exactly on target")
+            else:
+                pos += step
+
+
+            
+
+            positions.append(pos.copy())
+            velocities.append(speed)
+            times.append(time)
+
+            # stop early if very close to target
+            if np.linalg.norm(pos - target) < 0.1:
+                print("Reached target position")
+                break
+
+            time += dt
+            #print(f"Time: {time}, Position: {pos}, Speed: {speed}, current_dist: {current_dist}")
+
+        return times, positions, velocities
+
+    def PIDController(self, total_time=15.0, dt=0.5):
+        positions = []
+        velocities = []
+        times = []
+
+        pos = np.array(self.StartPos, dtype=float)
+        target = np.array(self.EndPos, dtype=float)
+
+        self.integral = np.array([0.0, 0.0, 0.0])
+        self.prev_error = target - pos
+        time = 0.0
+
+        while time < total_time:
+            error = target - pos
+            self.integral += error * dt
+            derivative = (error - self.prev_error) / dt
+            self.prev_error = error
+
+            control = self.kp * error + self.ki * self.integral + self.kd * derivative
+            pos += control * dt
+
+            velocity = np.linalg.norm(control)
+
+            positions.append(pos.copy())
+            velocities.append(velocity)
+            times.append(time)
+
+            if np.linalg.norm(error) < 0.1:
+                break
+
+            time += dt
+
+        return times, positions, velocities
+
+
+    def plot_controller(self, times, positions, velocities, label="nan"):
+        pos_deltas = [np.linalg.norm(p - positions[0]) for p in positions]
+        
+        # Ensure all velocities are scalars
+        vel_magnitudes = [np.linalg.norm(v) if isinstance(v, (np.ndarray, list, tuple)) else v for v in velocities]
+        max_vel = max(vel_magnitudes) if max(vel_magnitudes) != 0 else 1  # avoid division by zero
+
+        velocity_percent = [(v / max_vel) * 100 for v in vel_magnitudes]
+
+        fig, axs = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
+
+        axs[0].plot(times, velocity_percent, label=f'{label} Velocity [%]')
+        axs[0].set_ylabel("Velocity [%]")
+        axs[0].legend()
+        axs[0].grid(True)
+
+        axs[1].scatter(times, pos_deltas, s=10, label=f'{label} Position')
+        axs[1].set_ylabel("Position [mm]")
+        axs[1].set_xlabel("Time [s]")
+        axs[1].legend()
+        axs[1].grid(True)
+
+        plt.tight_layout()
+        plt.show()
